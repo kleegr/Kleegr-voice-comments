@@ -1,7 +1,7 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * Paste this into GHL Settings → Custom JS (after setting ENDPOINT below).
+ * Paste this into GHL Settings → Custom JS.
  *
  * What it does:
  *   - Adds a mic button to the conversation composer.
@@ -11,15 +11,14 @@
  *
  * It does NOT send anything to the contact — internal comment only.
  *
- * IMPORTANT: set ENDPOINT to your deployed Vercel URL + /api/internal-comment
- * and bump VERSION when you change this file (GHL caches custom JS hard).
+ * Bump VERSION when you change this file (GHL caches custom JS hard).
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
-  var ENDPOINT = "https://REPLACE-WITH-YOUR-VERCEL-URL/api/internal-comment";
-  var VERSION = 1;
+  var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
+  var VERSION = 2;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
