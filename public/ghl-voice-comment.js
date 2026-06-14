@@ -1,24 +1,19 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * Paste this into GHL Settings → Custom JS.
+ * Records a voice note in the GHL conversation and posts it as an
+ * InternalComment (audio attached) via the Vercel backend.
  *
- * What it does:
- *   - Adds a mic button to the conversation composer.
- *   - Records a voice note in the browser (MediaRecorder).
- *   - Sends the recording to the Vercel backend, which uploads the audio and
- *     posts it as an InternalComment on the open contact's conversation.
- *
- * It does NOT send anything to the contact — internal comment only.
- *
- * Bump VERSION when you change this file (GHL caches custom JS hard).
+ * v3: resolve the contact the same way the WhatsApp Reply/Forward script does
+ * (conversationId / contactId from the URL path), and place the mic next to
+ * the emoji icon in the Internal Comment composer.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 2;
+  var VERSION = 3;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
@@ -30,25 +25,42 @@
   var timerInt = null;
   var startedAt = 0;
 
-  // ---- helpers: resolve who we're commenting on ---------------------------
-  function getConversationId() {
-    var m = location.href.match(/conversations\/conversations\/([A-Za-z0-9]+)/);
+  // ---- resolve who we're commenting on (mirrors forwardMessage.v1.js) ----
+  function getLocationId() {
+    var path = location.pathname || "";
+    var m = path.match(/\/v2\/location\/([a-zA-Z0-9]+)/);
+    if (m) return m[1];
+    m = location.href.match(/[?&]locationId=([a-zA-Z0-9]+)/);
     return m ? m[1] : "";
   }
-  function getContactIdFromDom() {
-    // GHL renders a link to the contact detail somewhere in the conversation UI.
+  function getConversationId() {
+    var path = location.pathname || "";
+    var seg = path.split("/v2/location/")[1];
+    if (seg) {
+      var parts = seg.split("/");
+      // /v2/location/<loc>/conversations/conversations/<conversationId>
+      if (parts[1] === "conversations" && parts[2] === "conversations" && parts[3]) return parts[3];
+    }
+    var m = location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/);
+    return m ? m[1] : "";
+  }
+  function getContactId() {
+    var path = location.pathname || "";
+    var seg = path.split("/v2/location/")[1];
+    if (seg) {
+      var parts = seg.split("/");
+      // /v2/location/<loc>/contacts/detail/<contactId>
+      if (parts[1] === "contacts" && parts[2] === "detail" && parts[3]) return parts[3];
+    }
     var a = document.querySelector('a[href*="/contacts/detail/"]');
     if (a) {
-      var m = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/);
-      if (m) return m[1];
+      var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/);
+      if (mm) return mm[1];
     }
     return "";
   }
   function getUserId() {
-    // Best-effort: GHL exposes the logged-in user id in a few places.
-    try {
-      if (window.__USER__ && window.__USER__.id) return window.__USER__.id;
-    } catch (e) {}
+    try { if (window.__USER__ && window.__USER__.id) return window.__USER__.id; } catch (e) {}
     return "";
   }
 
@@ -60,10 +72,10 @@
     btn.title = "Record a voice note as an internal comment";
     btn.style.cssText = [
       "display:inline-flex", "align-items:center", "justify-content:center",
-      "gap:6px", "height:36px", "padding:0 12px", "border-radius:9999px",
+      "gap:6px", "height:34px", "padding:0 12px", "border-radius:9999px",
       "border:1px solid #e2e8f0", "background:#fff8e1", "color:#a16207",
-      "font:600 13px system-ui,sans-serif", "cursor:pointer", "margin:4px",
-      "box-shadow:0 1px 2px rgba(0,0,0,.06)"
+      "font:600 13px system-ui,sans-serif", "cursor:pointer", "margin:0 6px",
+      "box-shadow:0 1px 2px rgba(0,0,0,.06)", "vertical-align:middle"
     ].join(";");
     btn.innerHTML = micSvg() + '<span id="kleegr-voice-label">Voice note</span>';
     btn.addEventListener("click", onClick);
@@ -80,34 +92,56 @@
     if (b && bg) b.style.background = bg;
   }
 
-  // Floating fallback button (always available even if composer not found).
-  function ensureFloatingButton() {
-    if (document.getElementById("kleegr-voice-fab")) return;
-    var fab = makeButton();
-    fab.id = "kleegr-voice-fab";
-    fab.style.position = "fixed";
-    fab.style.right = "18px";
-    fab.style.bottom = "18px";
-    fab.style.zIndex = "99999";
-    document.body.appendChild(fab);
+  // Find the Internal Comment composer's action bar (where emoji/send live).
+  function findInternalCommentBar() {
+    var nodes = document.querySelectorAll("textarea, [contenteditable='true'], [placeholder]");
+    for (var i = 0; i < nodes.length; i++) {
+      var ph = (nodes[i].getAttribute && nodes[i].getAttribute("placeholder")) || "";
+      var tx = ph || nodes[i].textContent || "";
+      if (/internal comment/i.test(tx)) {
+        // climb to the composer card, then find the row holding the buttons
+        var node = nodes[i];
+        for (var j = 0; j < 7 && node; j++) {
+          var btns = node.querySelectorAll("button, [role='button']");
+          if (btns.length >= 1) {
+            // the bar is the parent of the first (left-most, i.e. emoji) button
+            return { bar: btns[0].parentElement || node, firstBtn: btns[0] };
+          }
+          node = node.parentElement;
+        }
+      }
+    }
+    return null;
   }
 
-  // Try to place the button inside the conversation composer toolbar.
-  function injectIntoComposer() {
-    // Common GHL composer anchors — try a few; harmless if none match (the
-    // floating button still works).
-    var composer = document.querySelector(
-      '.message-composer, .hl-text-editor, [class*="composer"], [class*="message-input"]'
-    );
-    if (composer && !composer.querySelector("#kleegr-voice-btn")) {
-      composer.appendChild(makeButton());
+  // Guarantee a button exists; prefer inline next to the emoji, else floating.
+  function placeButton() {
+    if (recording) return;
+    var btn = document.getElementById("kleegr-voice-btn");
+    if (!btn) {
+      btn = makeButton();
+      btn.style.position = "fixed";
+      btn.style.right = "18px";
+      btn.style.bottom = "72px";
+      btn.style.zIndex = "99999";
+      document.body.appendChild(btn);
+    }
+    var found = findInternalCommentBar();
+    if (found && found.bar && btn.parentNode !== found.bar) {
+      // move inline, clear floating styles, sit just left of the emoji button
+      btn.style.position = "";
+      btn.style.right = "";
+      btn.style.bottom = "";
+      btn.style.zIndex = "";
+      try { found.bar.insertBefore(btn, found.firstBtn); }
+      catch (e) { found.bar.insertBefore(btn, found.bar.firstChild); }
     }
   }
 
   // ---- recording -----------------------------------------------------------
-  function onClick() {
-    if (recording) { stopRecording(); }
-    else { startRecording(); }
+  function onClick(e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    if (recording) { stopRecording(); } else { startRecording(); }
   }
 
   function startRecording() {
@@ -149,7 +183,8 @@
 
   function send(blob) {
     var conversationId = getConversationId();
-    var contactId = getContactIdFromDom();
+    var contactId = getContactId();
+    var locationId = getLocationId();
     if (!conversationId && !contactId) {
       setLabel("Open a chat first", "#dc2626", "#fef2f2");
       setTimeout(reset, 2500);
@@ -159,6 +194,7 @@
     fd.append("file", blob, "voice-note.webm");
     if (contactId) fd.append("contactId", contactId);
     if (conversationId) fd.append("conversationId", conversationId);
+    if (locationId) fd.append("locationId", locationId);
     var uid = getUserId();
     if (uid) fd.append("userId", uid);
 
@@ -185,10 +221,7 @@
   }
 
   // ---- boot ----------------------------------------------------------------
-  function tick() {
-    ensureFloatingButton();
-    injectIntoComposer();
-  }
+  function tick() { placeButton(); }
   var obs = new MutationObserver(function () { tick(); });
   obs.observe(document.documentElement, { childList: true, subtree: true });
   setInterval(tick, 1500);
