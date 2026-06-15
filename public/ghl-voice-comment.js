@@ -1,17 +1,15 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v14: render players as soon as a conversation opens (anchor to the largest
- * visible composer, not the internal-comment box specifically). Hide raw link
- * via CSS, post-send burst, one player per note, borderless, 1s calm timer.
+ * v15: render players by scanning the whole page for voice-note links (no
+ * composer anchoring), skipping the left inbox list. Mic still only in the
+ * Internal Comment composer. CSS hides raw links; 1s calm timer.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
-  // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 14;
-  // -------------------------------------------------------------------------
+  var VERSION = 15;
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
@@ -83,7 +81,6 @@
 
   function isVisible(el) { if (!el) return false; if (el.offsetParent !== null) return true; var r = el.getClientRects(); return !!(r && r.length); }
 
-  // The active Internal Comment composer (for the mic). Must be visible + expanded.
   function activeInternalInput() {
     var inputs = document.querySelectorAll("textarea,[contenteditable='true']");
     for (var i = 0; i < inputs.length; i++) {
@@ -95,19 +92,6 @@
       return el;
     }
     return null;
-  }
-  // The largest visible composer (message OR internal) — used to locate the feed.
-  function conversationComposer() {
-    var inputs = document.querySelectorAll("textarea,[contenteditable='true']");
-    var best = null, bestArea = 0;
-    for (var i = 0; i < inputs.length; i++) {
-      var el = inputs[i];
-      if (!isVisible(el)) continue;
-      var r = el.getBoundingClientRect();
-      var area = (r.width || 0) * (r.height || 0);
-      if (area > bestArea) { bestArea = area; best = el; }
-    }
-    return best;
   }
   function readComposerNote() {
     var el = activeInternalInput(); if (!el) return "";
@@ -150,18 +134,23 @@
     if (w.parentNode !== target) { try { target.insertBefore(w, before); } catch (e) { footer.insertBefore(w, footer.firstChild); } }
   }
 
-  function feedScope() {
-    var comp = conversationComposer();
-    if (!comp) return null;
-    var node = comp;
-    for (var i = 0; i < 10 && node; i++) { if (node.getBoundingClientRect().height > 400) return node; node = node.parentElement; }
-    return node || null;
-  }
   var AUDIO_RE = /(\.webm|\.ogg|\.oga|\.mp3|\.m4a|\.wav)(\?|$)/i;
   function isAudioHref(href) { if (!href) return false; return AUDIO_RE.test(href) || /filesafe\.space\/[^\s]*\/media\//i.test(href); }
-  function chipExistsFor(scope, href) {
-    var auds = scope.querySelectorAll("audio.klg-audio");
+  function chipExistsForDoc(href) {
+    var auds = document.querySelectorAll("audio.klg-audio");
     for (var i = 0; i < auds.length; i++) { if (auds[i].getAttribute("src") === href) return true; }
+    return false;
+  }
+  // Is this link inside the left inbox list? (that area has many conversation-row links)
+  function inInboxList(el) {
+    var node = el;
+    for (var i = 0; i < 12 && node; i++) {
+      if (node.querySelectorAll) {
+        var rows = node.querySelectorAll('a[href*="/conversations/conversations/"]');
+        if (rows.length >= 3) return true;
+      }
+      node = node.parentElement;
+    }
     return false;
   }
 
@@ -189,15 +178,14 @@
   }
 
   function upgradeAudioComments() {
-    var scope = feedScope(); if (!scope) return;
-    if ((scope.textContent || "").indexOf("Voice note") === -1) return;
-    var links = scope.querySelectorAll("a[href]");
+    var links = document.getElementsByTagName("a");
     for (var i = 0; i < links.length; i++) {
       var a = links[i];
-      var href = a.getAttribute("href") || "";
+      var href = a.getAttribute && a.getAttribute("href") || "";
       if (!isAudioHref(href)) continue;
       a.style.display = "none";
-      if (chipExistsFor(scope, href)) continue;
+      if (chipExistsForDoc(href)) continue;       // one player per unique audio url
+      if (inInboxList(a)) continue;               // never in the left conversation list
       if (a.parentNode) a.parentNode.insertBefore(makeChip(href), a.nextSibling);
     }
   }
