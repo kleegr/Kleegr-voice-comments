@@ -1,18 +1,10 @@
 /**
  * POST /api/internal-comment
  *
- * Receives a recorded voice note from the GHL custom-JS mic button, uploads it
- * to the GHL media library, and posts it as an InternalComment on the contact's
- * conversation. The media URL is included in the message text so the custom JS
- * can render an inline <audio> player (GHL does not render attachments as a
- * player on internal comments).
- *
- * Multipart form fields:
- *   - file           (required)  the audio blob
- *   - contactId      (optional)  if known
- *   - conversationId (optional)  resolved to contactId server-side if contactId absent
- *   - userId         (optional)  GHL user the comment is attributed to
- *   - note           (optional)  text shown with the voice note
+ * Uploads the recorded voice note to GHL media and posts it as an
+ * InternalComment. Optional typed text (note) is included above the voice note.
+ * The media URL is included in the message text so the custom JS can render an
+ * inline player (GHL does not render attachments as players on internal comments).
  *
  * Auth: server-side PIT in env GHL_PIT. The browser never sees the token.
  */
@@ -82,10 +74,10 @@ export async function POST(req: Request) {
             );
         }
 
-        // Include the URL in the text so the custom JS can render an inline player.
-        // (GHL does not render attachments as a player on internal comments.)
-        const label = note || "\uD83C\uDFA4 Voice note";
-        const message = `${label} ${mediaUrl}`;
+        // Typed text (if any) goes first, then the voice-note label + URL (the
+        // custom JS turns the URL into an inline player).
+        const voiceLabel = "\uD83C\uDFA4 Voice note";
+        const message = note ? `${note}\n${voiceLabel} ${mediaUrl}` : `${voiceLabel} ${mediaUrl}`;
         const result = await sendInternalComment(token, {
             contactId,
             message,

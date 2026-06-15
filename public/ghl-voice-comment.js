@@ -1,55 +1,40 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v9: GHL auto-linkifies the audio URL into an <a>. Detect that link in the
- * conversation feed and swap in a real inline <audio> player (keeping a tiny
- * ↗ open-link fallback). Non-destructive; never touches the inbox list.
+ * v10: slim custom audio player (play/seek/time + speed toggle) replacing the
+ * bulky native control; type text in the comment box and it is sent together
+ * with the voice note.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 9;
+  var VERSION = 10;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
 
-  var recording = false, pendingSend = false, mediaRecorder = null, chunks = [], timerInt = null, startedAt = 0, lastStream = null;
+  var recording = false, pendingSend = false, pendingNote = "", mediaRecorder = null, chunks = [], timerInt = null, startedAt = 0, lastStream = null;
 
-  function getLocationId() {
-    var p = location.pathname || "";
-    var m = p.match(/\/v2\/location\/([a-zA-Z0-9]+)/);
-    if (m) return m[1];
-    m = location.href.match(/[?&]locationId=([a-zA-Z0-9]+)/);
-    return m ? m[1] : "";
-  }
-  function getConversationId() {
-    var seg = (location.pathname || "").split("/v2/location/")[1];
-    if (seg) { var parts = seg.split("/"); if (parts[1] === "conversations" && parts[2] === "conversations" && parts[3]) return parts[3]; }
-    var m = location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/);
-    return m ? m[1] : "";
-  }
-  function getContactId() {
-    var seg = (location.pathname || "").split("/v2/location/")[1];
-    if (seg) { var parts = seg.split("/"); if (parts[1] === "contacts" && parts[2] === "detail" && parts[3]) return parts[3]; }
-    var a = document.querySelector('a[href*="/contacts/detail/"]');
-    if (a) { var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/); if (mm) return mm[1]; }
-    return "";
-  }
+  function getLocationId() { var p = location.pathname || ""; var m = p.match(/\/v2\/location\/([a-zA-Z0-9]+)/); if (m) return m[1]; m = location.href.match(/[?&]locationId=([a-zA-Z0-9]+)/); return m ? m[1] : ""; }
+  function getConversationId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "conversations" && parts[2] === "conversations" && parts[3]) return parts[3]; } var m = location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/); return m ? m[1] : ""; }
+  function getContactId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "contacts" && parts[2] === "detail" && parts[3]) return parts[3]; } var a = document.querySelector('a[href*="/contacts/detail/"]'); if (a) { var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/); if (mm) return mm[1]; } return ""; }
   function getUserId() { try { if (window.__USER__ && window.__USER__.id) return window.__USER__.id; } catch (e) {} return ""; }
 
   function micSvg(c) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="' + c + '"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>'; }
   function checkSvg(c) { return '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'; }
   function xSvg(c) { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>'; }
+  function playSvg() { return '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'; }
+  function pauseSvg() { return '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'; }
+  function fmt(s) { s = Math.floor(s || 0); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
 
   var AMBER = "#b45309", AMBER_BG = "#fff8e1", AMBER_BD = "#f59e0b";
 
   function injectStyleOnce() {
     if (document.getElementById("kleegr-voice-style")) return;
-    var s = document.createElement("style");
-    s.id = "kleegr-voice-style";
+    var s = document.createElement("style"); s.id = "kleegr-voice-style";
     s.textContent =
       ".klg-wave{display:inline-flex;align-items:center;gap:2px;height:16px}" +
       ".klg-wave i{display:inline-block;width:2px;height:5px;background:" + AMBER + ";border-radius:1px;animation:klgwave .9s ease-in-out infinite}" +
@@ -109,6 +94,22 @@
     }
     return null;
   }
+  function readComposerNote() {
+    var el = activeInternalInput(); if (!el) return "";
+    var t = (el.tagName === "TEXTAREA" || el.tagName === "INPUT") ? (el.value || "") : (el.textContent || "");
+    return (t || "").trim();
+  }
+  function clearComposer() {
+    var el = activeInternalInput(); if (!el) return;
+    try {
+      if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
+        var proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        var setter = Object.getOwnPropertyDescriptor(proto, "value");
+        setter.set.call(el, "");
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      } else { el.textContent = ""; el.dispatchEvent(new Event("input", { bubbles: true })); }
+    } catch (e) {}
+  }
   function footerFrom(el) {
     var card = el;
     for (var j = 0; j < 9 && card; j++) {
@@ -134,7 +135,7 @@
     if (w.parentNode !== target) { try { target.insertBefore(w, before); } catch (e) { footer.insertBefore(w, footer.firstChild); } }
   }
 
-  // ---- feed scope (excludes the left inbox list) --------------------------
+  // ---- inline player -------------------------------------------------------
   function feedScope() {
     var comp = activeInternalInput() || document.querySelector("textarea,[contenteditable='true']");
     if (!comp) return null;
@@ -143,20 +144,39 @@
     return node || null;
   }
   var AUDIO_RE = /(\.webm|\.ogg|\.oga|\.mp3|\.m4a|\.wav)(\?|$)/i;
-  function isAudioHref(href) {
-    if (!href) return false;
-    return AUDIO_RE.test(href) || /filesafe\.space\/[^\s]*\/media\//i.test(href);
-  }
+  function isAudioHref(href) { if (!href) return false; return AUDIO_RE.test(href) || /filesafe\.space\/[^\s]*\/media\//i.test(href); }
+
   function makeChip(href) {
     var chip = document.createElement("span");
     chip.className = "klg-audio-chip";
-    chip.style.cssText = "display:inline-flex;align-items:center;gap:6px;background:" + AMBER_BG + ";border:1px solid " + AMBER_BD + ";border-radius:10px;padding:3px 8px;margin:2px 4px;vertical-align:middle";
-    chip.innerHTML = '<audio controls preload="metadata" src="' + href + '" style="height:30px;width:180px"></audio>';
+    chip.style.cssText = "display:inline-flex;align-items:center;gap:7px;background:" + AMBER_BG + ";border:1px solid " + AMBER_BD + ";border-radius:9px;padding:2px 8px;margin:2px 4px;vertical-align:middle";
+
+    var audio = document.createElement("audio"); audio.src = href; audio.preload = "metadata";
+    var play = document.createElement("button"); play.type = "button";
+    play.style.cssText = "border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:0;color:" + AMBER;
+    play.innerHTML = playSvg();
+    var barWrap = document.createElement("span"); barWrap.style.cssText = "position:relative;width:84px;height:4px;background:rgba(180,83,9,.25);border-radius:2px;cursor:pointer;flex:0 0 auto";
+    var barFill = document.createElement("span"); barFill.style.cssText = "position:absolute;left:0;top:0;height:100%;width:0%;background:" + AMBER + ";border-radius:2px"; barWrap.appendChild(barFill);
+    var time = document.createElement("span"); time.style.cssText = "font:600 11px system-ui;color:" + AMBER + ";white-space:nowrap"; time.textContent = "0:00";
+    var speed = document.createElement("button"); speed.type = "button"; speed.style.cssText = "border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:" + AMBER + ";padding:2px 5px";
+    var rates = [1, 1.5, 2, 0.75], ri = 0; speed.textContent = "1x";
+    var open = document.createElement("a"); open.href = href; open.target = "_blank"; open.rel = "noopener"; open.textContent = "\u2197"; open.title = "Open in new tab"; open.style.cssText = "color:" + AMBER + ";text-decoration:none;font:700 12px system-ui";
+
+    play.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); if (audio.paused) audio.play(); else audio.pause(); });
+    audio.addEventListener("play", function () { play.innerHTML = pauseSvg(); });
+    audio.addEventListener("pause", function () { play.innerHTML = playSvg(); });
+    audio.addEventListener("ended", function () { play.innerHTML = playSvg(); });
+    audio.addEventListener("loadedmetadata", function () { time.textContent = "0:00" + (isFinite(audio.duration) ? " / " + fmt(audio.duration) : ""); });
+    audio.addEventListener("timeupdate", function () { if (audio.duration && isFinite(audio.duration)) { barFill.style.width = (audio.currentTime / audio.duration * 100) + "%"; time.textContent = fmt(audio.currentTime) + " / " + fmt(audio.duration); } else { time.textContent = fmt(audio.currentTime); } });
+    barWrap.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); var r = barWrap.getBoundingClientRect(); var p = (e.clientX - r.left) / r.width; if (audio.duration && isFinite(audio.duration)) audio.currentTime = Math.max(0, Math.min(1, p)) * audio.duration; });
+    speed.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); ri = (ri + 1) % rates.length; audio.playbackRate = rates[ri]; speed.textContent = rates[ri] + "x"; });
+
+    chip.appendChild(play); chip.appendChild(barWrap); chip.appendChild(time); chip.appendChild(speed); chip.appendChild(open); chip.appendChild(audio);
     return chip;
   }
+
   function upgradeAudioComments() {
     var scope = feedScope(); if (!scope) return;
-    // Case A: GHL linkified the URL into an <a>
     var links = scope.querySelectorAll("a[href]");
     for (var i = 0; i < links.length; i++) {
       var a = links[i];
@@ -165,11 +185,8 @@
       if (!isAudioHref(href)) continue;
       a.__klgDone = true;
       if (a.parentNode) a.parentNode.insertBefore(makeChip(href), a.nextSibling);
-      a.textContent = "\u2197";
-      a.style.cssText = "margin-left:4px;color:" + AMBER + ";text-decoration:none;font:700 13px system-ui";
-      a.title = "Open audio in new tab";
+      a.style.display = "none";
     }
-    // Case B: plain-text URL (not linkified) — fallback
     if ((scope.textContent || "").indexOf("Voice note") === -1) return;
     var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
     var hits = [], node;
@@ -204,7 +221,13 @@
     }).catch(function () { renderStatus("Mic permission denied", "#dc2626", 3000); });
   }
   function stopTimer() { if (timerInt) { clearInterval(timerInt); timerInt = null; } }
-  function confirmRecording() { if (!recording) return; recording = false; pendingSend = true; stopTimer(); renderStatus("Sending…", "#2563eb"); try { mediaRecorder && mediaRecorder.stop(); } catch (e) {} }
+  function confirmRecording() {
+    if (!recording) return;
+    pendingNote = readComposerNote();      // capture any typed text
+    recording = false; pendingSend = true; stopTimer();
+    renderStatus("Sending…", "#2563eb");
+    try { mediaRecorder && mediaRecorder.stop(); } catch (e) {}
+  }
   function cancelRecording() { recording = false; pendingSend = false; stopTimer(); try { mediaRecorder && mediaRecorder.stop(); } catch (e) {} renderIdle(); }
 
   function send(blob) {
@@ -215,11 +238,12 @@
     if (contactId) fd.append("contactId", contactId);
     if (conversationId) fd.append("conversationId", conversationId);
     if (locationId) fd.append("locationId", locationId);
+    if (pendingNote) fd.append("note", pendingNote);
     var uid = getUserId(); if (uid) fd.append("userId", uid);
     fetch(ENDPOINT, { method: "POST", body: fd })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
-        if (res.j && res.j.success) { renderStatus("Posted ✓", "#15803d", 2500); }
+        if (res.j && res.j.success) { if (pendingNote) clearComposer(); pendingNote = ""; renderStatus("Posted ✓", "#15803d", 2500); }
         else { var msg = (res.j && res.j.error) ? String(res.j.error).slice(0, 80) : "error"; renderStatus("Failed: " + msg, "#dc2626", 6000); console.error("[kleegr-voice] post failed:", res.j && res.j.error); }
       })
       .catch(function (err) { renderStatus("Network blocked", "#dc2626", 5000); console.error("[kleegr-voice] network error:", err); });
