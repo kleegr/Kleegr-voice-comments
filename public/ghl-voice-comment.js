@@ -4,38 +4,38 @@
  * Records a voice note in the GHL conversation and posts it as an
  * InternalComment (audio attached) via the Vercel backend.
  *
- * v4: WhatsApp-style mic ICON (no text pill), placed next to the emoji on
- * the left of the Internal Comment composer. Contact resolved from the URL
- * path (same as the Reply/Forward script).
+ * v5: yellow recording bar (timer + waveform + cancel/send), placed next to
+ * the emoji. Shows failure reasons on-screen so issues are self-diagnosing.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 4;
+  var VERSION = 5;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
 
   var recording = false;
+  var pendingSend = false;
   var mediaRecorder = null;
   var chunks = [];
   var timerInt = null;
   var startedAt = 0;
+  var lastStream = null;
 
   // ---- resolve who we're commenting on (mirrors forwardMessage.v1.js) ----
   function getLocationId() {
-    var path = location.pathname || "";
-    var m = path.match(/\/v2\/location\/([a-zA-Z0-9]+)/);
+    var p = location.pathname || "";
+    var m = p.match(/\/v2\/location\/([a-zA-Z0-9]+)/);
     if (m) return m[1];
     m = location.href.match(/[?&]locationId=([a-zA-Z0-9]+)/);
     return m ? m[1] : "";
   }
   function getConversationId() {
-    var path = location.pathname || "";
-    var seg = path.split("/v2/location/")[1];
+    var seg = (location.pathname || "").split("/v2/location/")[1];
     if (seg) {
       var parts = seg.split("/");
       if (parts[1] === "conversations" && parts[2] === "conversations" && parts[3]) return parts[3];
@@ -44,17 +44,13 @@
     return m ? m[1] : "";
   }
   function getContactId() {
-    var path = location.pathname || "";
-    var seg = path.split("/v2/location/")[1];
+    var seg = (location.pathname || "").split("/v2/location/")[1];
     if (seg) {
       var parts = seg.split("/");
       if (parts[1] === "contacts" && parts[2] === "detail" && parts[3]) return parts[3];
     }
     var a = document.querySelector('a[href*="/contacts/detail/"]');
-    if (a) {
-      var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/);
-      if (mm) return mm[1];
-    }
+    if (a) { var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/); if (mm) return mm[1]; }
     return "";
   }
   function getUserId() {
@@ -63,48 +59,69 @@
   }
 
   // ---- icons ---------------------------------------------------------------
-  function micSvg(color) {
-    return '<svg width="21" height="21" viewBox="0 0 24 24" fill="' + color + '"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>';
-  }
-  function checkSvg(color) {
-    return '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="' + color + '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  function micSvg(c) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="' + c + '"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>'; }
+  function checkSvg(c) { return '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'; }
+  function xSvg(c) { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>'; }
+
+  // amber palette = “internal comment”
+  var AMBER = "#b45309", AMBER_BG = "#fff8e1", AMBER_BD = "#f59e0b";
+
+  function injectStyleOnce() {
+    if (document.getElementById("kleegr-voice-style")) return;
+    var s = document.createElement("style");
+    s.id = "kleegr-voice-style";
+    s.textContent =
+      ".klg-wave{display:inline-flex;align-items:center;gap:2px;height:16px}" +
+      ".klg-wave i{display:inline-block;width:2px;height:5px;background:" + AMBER + ";border-radius:1px;animation:klgwave .9s ease-in-out infinite}" +
+      ".klg-wave i:nth-child(2){animation-delay:.12s}.klg-wave i:nth-child(3){animation-delay:.24s}" +
+      ".klg-wave i:nth-child(4){animation-delay:.36s}.klg-wave i:nth-child(5){animation-delay:.48s}" +
+      "@keyframes klgwave{0%,100%{height:5px}50%{height:15px}}";
+    document.head.appendChild(s);
   }
 
-  // ---- button --------------------------------------------------------------
-  function makeButton() {
+  // ---- render states into the wrap ----------------------------------------
+  function wrap() { return document.getElementById("kleegr-voice-wrap"); }
+
+  function renderIdle() {
+    var w = wrap(); if (!w) return;
+    w.innerHTML = "";
     var btn = document.createElement("button");
-    btn.id = "kleegr-voice-btn";
     btn.type = "button";
     btn.title = "Record a voice note (internal comment)";
-    btn.style.cssText =
-      "display:inline-flex;align-items:center;gap:5px;height:34px;min-width:34px;" +
-      "padding:0 6px;border:none;border-radius:18px;background:transparent;" +
-      "cursor:pointer;font:600 12px system-ui,sans-serif;vertical-align:middle;";
-    btn.innerHTML =
-      '<span id="kleegr-voice-ic" style="display:inline-flex;align-items:center">' + micSvg("#54656f") + "</span>" +
-      '<span id="kleegr-voice-timer" style="display:none"></span>';
-    btn.addEventListener("click", onClick);
-    btn.addEventListener("mouseenter", function () { if (!recording) btn.style.background = "rgba(0,0,0,0.06)"; });
+    btn.style.cssText = "display:inline-flex;align-items:center;justify-content:center;height:34px;width:34px;border:none;border-radius:50%;background:transparent;cursor:pointer;";
+    btn.innerHTML = micSvg(AMBER);
+    btn.addEventListener("mouseenter", function () { btn.style.background = "rgba(180,83,9,0.10)"; });
     btn.addEventListener("mouseleave", function () { btn.style.background = "transparent"; });
-    return btn;
+    btn.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); startRecording(); });
+    w.appendChild(btn);
   }
 
-  function setState(state) {
-    var ic = document.getElementById("kleegr-voice-ic");
-    var tm = document.getElementById("kleegr-voice-timer");
-    if (!ic) return;
-    if (state === "idle") { ic.innerHTML = micSvg("#54656f"); if (tm) { tm.style.display = "none"; tm.textContent = ""; } }
-    else if (state === "recording") { ic.innerHTML = micSvg("#dc2626"); if (tm) { tm.style.display = "inline"; tm.style.color = "#dc2626"; } }
-    else if (state === "sending") { ic.innerHTML = micSvg("#2563eb"); if (tm) { tm.style.display = "none"; } }
-    else if (state === "posted") { ic.innerHTML = checkSvg("#15803d"); if (tm) { tm.style.display = "none"; } }
-    else if (state === "failed") { ic.innerHTML = micSvg("#dc2626"); if (tm) { tm.style.display = "none"; } }
-  }
-  function setTimerText(t) {
-    var tm = document.getElementById("kleegr-voice-timer");
-    if (tm) tm.textContent = t;
+  function renderRecording() {
+    var w = wrap(); if (!w) return;
+    injectStyleOnce();
+    w.innerHTML =
+      '<span style="display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 10px;border-radius:18px;background:' + AMBER_BG + ';border:1px solid ' + AMBER_BD + ';color:' + AMBER + ';font:600 12px system-ui,sans-serif">' +
+      '<span style="width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block"></span>' +
+      '<span class="klg-wave"><i></i><i></i><i></i><i></i><i></i></span>' +
+      '<span id="kleegr-voice-timer">0:00</span>' +
+      '<span id="kleegr-voice-cancel" title="Cancel" style="cursor:pointer;display:inline-flex;padding:2px">' + xSvg(AMBER) + '</span>' +
+      '<span id="kleegr-voice-send" title="Send as internal comment" style="cursor:pointer;display:inline-flex;padding:2px">' + checkSvg("#15803d") + '</span>' +
+      '</span>';
+    var c = document.getElementById("kleegr-voice-cancel");
+    var s = document.getElementById("kleegr-voice-send");
+    if (c) c.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); cancelRecording(); });
+    if (s) s.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); confirmRecording(); });
   }
 
-  // ---- find the Internal Comment composer footer (emoji/send row) ---------
+  function renderStatus(text, color, revertMs) {
+    var w = wrap(); if (!w) return;
+    w.innerHTML =
+      '<span style="display:inline-flex;align-items:center;height:34px;padding:0 12px;border-radius:18px;background:' + AMBER_BG + ';border:1px solid ' + AMBER_BD + ';color:' + (color || AMBER) + ';font:600 12px system-ui,sans-serif;max-width:340px">' +
+      text + '</span>';
+    if (revertMs) setTimeout(function () { if (!recording) renderIdle(); }, revertMs);
+  }
+
+  // ---- placement -----------------------------------------------------------
   function findInternalCommentFooter() {
     var nodes = document.querySelectorAll("textarea,[contenteditable='true'],[placeholder]");
     for (var i = 0; i < nodes.length; i++) {
@@ -113,15 +130,10 @@
       if (/internal comment/i.test(tx)) {
         var card = nodes[i];
         for (var j = 0; j < 9 && card; j++) {
-          var send = card.querySelector(
-            "#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']"
-          );
+          var send = card.querySelector("#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']");
           if (send) {
             var bar = send.parentElement;
-            for (var k = 0; k < 5 && bar; k++) {
-              if (bar.children && bar.children.length >= 2) return bar;
-              bar = bar.parentElement;
-            }
+            for (var k = 0; k < 5 && bar; k++) { if (bar.children && bar.children.length >= 2) return bar; bar = bar.parentElement; }
             return send.parentElement;
           }
           card = card.parentElement;
@@ -131,85 +143,72 @@
     return null;
   }
 
-  function styleInline(btn) {
-    btn.style.position = ""; btn.style.right = ""; btn.style.bottom = ""; btn.style.zIndex = "";
-    btn.style.boxShadow = ""; btn.style.background = "transparent";
-  }
-  function styleFloating(btn) {
-    btn.style.position = "fixed"; btn.style.right = "18px"; btn.style.bottom = "74px"; btn.style.zIndex = "99999";
-    btn.style.background = "#ffffff"; btn.style.boxShadow = "0 2px 8px rgba(0,0,0,.18)";
-  }
-
-  // Guarantee one button; prefer inline next to the emoji, else floating.
-  function placeButton() {
+  function placeWrap() {
     if (recording) return;
-    var btn = document.getElementById("kleegr-voice-btn");
-    if (!btn) { btn = makeButton(); styleFloating(btn); document.body.appendChild(btn); }
-
+    var w = wrap();
+    if (!w) {
+      w = document.createElement("span");
+      w.id = "kleegr-voice-wrap";
+      w.style.cssText = "display:inline-flex;align-items:center;vertical-align:middle";
+      document.body.appendChild(w);
+      w.style.position = "fixed"; w.style.right = "18px"; w.style.bottom = "74px"; w.style.zIndex = "99999";
+      renderIdle();
+    }
     var footer = findInternalCommentFooter();
     if (!footer) return;
-
-    var send = footer.querySelector(
-      "#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']"
-    );
+    var send = footer.querySelector("#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']");
     var leftGroup = footer.firstElementChild;
     var target, before;
-    if (leftGroup && send && !leftGroup.contains(send)) {
-      // two-cluster layout: left icons (emoji/clear) vs right (send)
-      target = leftGroup; before = leftGroup.firstChild;
-    } else {
-      // flat layout: drop at the very left
-      target = footer; before = footer.firstChild;
-    }
-    if (btn.parentNode !== target) {
-      styleInline(btn);
-      try { target.insertBefore(btn, before); }
-      catch (e) { footer.insertBefore(btn, footer.firstChild); }
+    if (leftGroup && send && !leftGroup.contains(send)) { target = leftGroup; before = leftGroup.firstChild; }
+    else { target = footer; before = footer.firstChild; }
+    if (w.parentNode !== target) {
+      w.style.position = ""; w.style.right = ""; w.style.bottom = ""; w.style.zIndex = "";
+      try { target.insertBefore(w, before); } catch (e) { footer.insertBefore(w, footer.firstChild); }
     }
   }
 
   // ---- recording -----------------------------------------------------------
-  function onClick(e) {
-    if (e) { e.preventDefault(); e.stopPropagation(); }
-    if (recording) { stopRecording(); } else { startRecording(); }
-  }
-
   function startRecording() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      alert("Microphone not supported in this browser.");
-      return;
-    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { renderStatus("Mic not supported here", "#dc2626", 3000); return; }
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      lastStream = stream;
       chunks = [];
-      var mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
+      var mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
         : (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "");
       mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       mediaRecorder.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
       mediaRecorder.onstop = function () {
-        stream.getTracks().forEach(function (t) { t.stop(); });
-        var blob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
-        send(blob);
+        if (lastStream) lastStream.getTracks().forEach(function (t) { t.stop(); });
+        if (pendingSend) {
+          var blob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
+          send(blob);
+        } else {
+          renderIdle();
+        }
       };
       mediaRecorder.start();
-      recording = true;
-      startedAt = Date.now();
-      setState("recording");
-      setTimerText("0:00");
+      recording = true; pendingSend = false; startedAt = Date.now();
+      renderRecording();
       timerInt = setInterval(function () {
         var s = Math.floor((Date.now() - startedAt) / 1000);
-        setTimerText(Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"));
+        var tm = document.getElementById("kleegr-voice-timer");
+        if (tm) tm.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
       }, 500);
-    }).catch(function () {
-      alert("Microphone permission denied.");
-    });
+    }).catch(function () { renderStatus("Mic permission denied", "#dc2626", 3000); });
   }
 
-  function stopRecording() {
-    recording = false;
-    if (timerInt) { clearInterval(timerInt); timerInt = null; }
-    setState("sending");
+  function stopTimer() { if (timerInt) { clearInterval(timerInt); timerInt = null; } }
+
+  function confirmRecording() {
+    if (!recording) return;
+    recording = false; pendingSend = true; stopTimer();
+    renderStatus("Sending…", "#2563eb");
     try { mediaRecorder && mediaRecorder.stop(); } catch (e) {}
+  }
+  function cancelRecording() {
+    recording = false; pendingSend = false; stopTimer();
+    try { mediaRecorder && mediaRecorder.stop(); } catch (e) {}
+    renderIdle();
   }
 
   function send(blob) {
@@ -217,9 +216,8 @@
     var contactId = getContactId();
     var locationId = getLocationId();
     if (!conversationId && !contactId) {
-      setState("failed");
-      console.error("[kleegr-voice] no conversationId/contactId found in URL");
-      setTimeout(function () { setState("idle"); }, 2000);
+      renderStatus("Can’t find the contact on this screen", "#dc2626", 5000);
+      console.error("[kleegr-voice] no conversationId/contactId; url=", location.href);
       return;
     }
     var fd = new FormData();
@@ -227,25 +225,26 @@
     if (contactId) fd.append("contactId", contactId);
     if (conversationId) fd.append("conversationId", conversationId);
     if (locationId) fd.append("locationId", locationId);
-    var uid = getUserId();
-    if (uid) fd.append("userId", uid);
+    var uid = getUserId(); if (uid) fd.append("userId", uid);
 
     fetch(ENDPOINT, { method: "POST", body: fd })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        if (j && j.success) { setState("posted"); }
-        else { setState("failed"); console.error("[kleegr-voice] post failed:", j && j.error); }
-        setTimeout(function () { setState("idle"); }, 2000);
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (res.j && res.j.success) { renderStatus("Posted ✓", "#15803d", 2500); }
+        else {
+          var msg = (res.j && res.j.error) ? String(res.j.error).slice(0, 80) : ("HTTP " + (res.ok ? "200" : "error"));
+          renderStatus("Failed: " + msg, "#dc2626", 6000);
+          console.error("[kleegr-voice] post failed:", res.j && res.j.error);
+        }
       })
       .catch(function (err) {
-        setState("failed");
+        renderStatus("Network blocked", "#dc2626", 5000);
         console.error("[kleegr-voice] network error:", err);
-        setTimeout(function () { setState("idle"); }, 2000);
       });
   }
 
   // ---- boot ----------------------------------------------------------------
-  function tick() { placeButton(); }
+  function tick() { placeWrap(); }
   var obs = new MutationObserver(function () { tick(); });
   obs.observe(document.documentElement, { childList: true, subtree: true });
   setInterval(tick, 1500);
