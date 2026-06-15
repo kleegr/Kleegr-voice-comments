@@ -2,7 +2,7 @@
   "name": "kleegr-voice-comments",
   "version": "1.0.0",
   "private": true,
-  "description": "Mic button for GHL internal comments — records a voice note and posts it as an InternalComment with the audio attached. Standalone Next.js app on Vercel; no dependency on the WhatsApp droplet.",
+  "description": "Mic button for GHL internal comments. Records a voice note and posts it as an InternalComment with inline audio playback. Multi-subaccount via per-location tokens read from the shared Supabase Token table.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -12,11 +12,13 @@
     "axios": "^1.7.7",
     "form-data": "^4.0.1",
     "next": "14.2.15",
+    "pg": "^8.13.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.10",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "typescript": "^5.5.0"
