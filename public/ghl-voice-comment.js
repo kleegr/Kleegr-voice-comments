@@ -1,15 +1,16 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v12: one player per note (deduped by audio URL so GHL re-renders can't
- * stack them), borderless so it sits cleanly inside the yellow bubble.
+ * v13: hide the raw audio link instantly via CSS (no URL flash), and do a
+ * quick burst of upgrade checks right after sending so the player appears
+ * almost immediately. One player per note, borderless, 1s calm timer.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 12;
+  var VERSION = 13;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
@@ -35,6 +36,8 @@
     if (document.getElementById("kleegr-voice-style")) return;
     var s = document.createElement("style"); s.id = "kleegr-voice-style";
     s.textContent =
+      // hide the raw audio link the instant GHL renders it (no URL flash)
+      'a[href$=".webm"],a[href$=".ogg"],a[href$=".oga"],a[href$=".mp3"],a[href$=".m4a"],a[href$=".wav"]{display:none!important}' +
       ".klg-wave{display:inline-flex;align-items:center;gap:2px;height:16px}" +
       ".klg-wave i{display:inline-block;width:2px;height:5px;background:" + AMBER + ";border-radius:1px;animation:klgwave .9s ease-in-out infinite}" +
       ".klg-wave i:nth-child(2){animation-delay:.12s}.klg-wave i:nth-child(3){animation-delay:.24s}" +
@@ -60,7 +63,6 @@
 
   function renderRecording() {
     var w = wrap(); if (!w) return;
-    injectStyleOnce();
     w.innerHTML =
       '<span style="display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 10px;border-radius:18px;background:' + AMBER_BG + ';border:1px solid ' + AMBER_BD + ';color:' + AMBER + ';font:600 12px system-ui,sans-serif">' +
       '<span style="width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block"></span>' +
@@ -180,10 +182,8 @@
       var a = links[i];
       var href = a.getAttribute("href") || "";
       if (!isAudioHref(href)) continue;
-      // hide the raw link either way
-      a.style.display = "none";
-      // ONE player per unique audio url across the feed (survives GHL re-renders)
-      if (chipExistsFor(scope, href)) continue;
+      a.style.display = "none"; // belt-and-suspenders with the CSS rule
+      if (chipExistsFor(scope, href)) continue;  // one player per unique audio url
       if (a.parentNode) a.parentNode.insertBefore(makeChip(href), a.nextSibling);
     }
   }
@@ -228,13 +228,19 @@
     fetch(ENDPOINT, { method: "POST", body: fd })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
-        if (res.j && res.j.success) { if (pendingNote) clearComposer(); pendingNote = ""; renderStatus("Posted ✓", "#15803d", 2500); }
+        if (res.j && res.j.success) {
+          if (pendingNote) clearComposer(); pendingNote = "";
+          renderStatus("Posted ✓", "#15803d", 2500);
+          // quick burst so the player appears almost immediately (no waiting for the 1s tick)
+          [150, 400, 800, 1400, 2200].forEach(function (d) { setTimeout(function () { try { upgradeAudioComments(); } catch (e) {} }, d); });
+        }
         else { var msg = (res.j && res.j.error) ? String(res.j.error).slice(0, 80) : "error"; renderStatus("Failed: " + msg, "#dc2626", 6000); console.error("[kleegr-voice] post failed:", res.j && res.j.error); }
       })
       .catch(function (err) { renderStatus("Network blocked", "#dc2626", 5000); console.error("[kleegr-voice] network error:", err); });
   }
 
-  // ---- boot: calm 1s timer only (NO MutationObserver) ---------------------
+  // ---- boot: hide-link CSS now; calm 1s timer (NO MutationObserver) -------
+  injectStyleOnce();
   var ticking = false;
   function tick() {
     if (ticking) return;
