@@ -4,7 +4,8 @@
  * Multi-subaccount: resolves a per-location GHL token from the shared Supabase
  * Token table (falls back to GHL_PIT for the demo). Uploads the audio, posts an
  * InternalComment with the media URL in the text (custom JS renders the player).
- * On an auth failure, refreshes the location token once and retries.
+ * On an auth failure, refreshes the location token once and retries. If a
+ * provided userId is invalid, retries without it so the comment still posts.
  */
 
 import { NextResponse } from "next/server";
@@ -63,6 +64,20 @@ export async function POST(req: Request) {
         const filename = file.name || "voice-note.webm";
         const mime = file.type || "audio/webm";
 
+        async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
+            const voiceLabel = "\uD83C\uDFA4 Voice note";
+            const message = note ? `${note}\n${voiceLabel} ${mediaUrl}` : `${voiceLabel} ${mediaUrl}`;
+            try {
+                return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] });
+            } catch (e: any) {
+                // If the userId we passed is invalid, post without it rather than fail.
+                if (userId && !isAuthError(e)) {
+                    return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] });
+                }
+                throw e;
+            }
+        }
+
         async function run(accessToken: string) {
             let contactId = contactIdIn;
             if (!contactId && conversationId) {
@@ -71,14 +86,7 @@ export async function POST(req: Request) {
             }
             const mediaUrl = await uploadAudio(accessToken, buffer, filename, mime);
             if (!mediaUrl) throw { code: "UPLOAD_FAILED" };
-            const voiceLabel = "\uD83C\uDFA4 Voice note";
-            const message = note ? `${note}\n${voiceLabel} ${mediaUrl}` : `${voiceLabel} ${mediaUrl}`;
-            const messageId = await sendInternalComment(accessToken, {
-                contactId,
-                message,
-                userId: userId || undefined,
-                attachments: [mediaUrl],
-            });
+            const messageId = await postComment(accessToken, contactId, mediaUrl);
             return { mediaUrl, messageId, contactId };
         }
 
@@ -86,7 +94,6 @@ export async function POST(req: Request) {
         try {
             out = await run(token);
         } catch (e: any) {
-            // refresh + retry once, only for a real auth failure on a DB-backed token
             if (row && isAuthError(e)) {
                 const fresh = await refreshLocationToken(row);
                 if (!fresh) throw e;

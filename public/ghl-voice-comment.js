@@ -1,15 +1,15 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v15: render players by scanning the whole page for voice-note links (no
- * composer anchoring), skipping the left inbox list. Mic still only in the
- * Internal Comment composer. CSS hides raw links; 1s calm timer.
+ * v16: attribute the comment to the logged-in GHL user (read their user id
+ * from the page so it shows their name, not generic “US”). Whole-page player
+ * scan, skip inbox list, CSS-hide raw links, 1s calm timer.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 15;
+  var VERSION = 16;
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
@@ -19,7 +19,39 @@
   function getLocationId() { var p = location.pathname || ""; var m = p.match(/\/v2\/location\/([a-zA-Z0-9]+)/); if (m) return m[1]; m = location.href.match(/[?&]locationId=([a-zA-Z0-9]+)/); return m ? m[1] : ""; }
   function getConversationId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "conversations" && parts[2] === "conversations" && parts[3]) return parts[3]; } var m = location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/); return m ? m[1] : ""; }
   function getContactId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "contacts" && parts[2] === "detail" && parts[3]) return parts[3]; } var a = document.querySelector('a[href*="/contacts/detail/"]'); if (a) { var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/); if (mm) return mm[1]; } return ""; }
-  function getUserId() { try { if (window.__USER__ && window.__USER__.id) return window.__USER__.id; } catch (e) {} return ""; }
+
+  // ---- resolve the logged-in GHL user id (so the comment shows their name) -
+  function decodeJwtPayload(jwt) {
+    try {
+      var b = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+      var json = decodeURIComponent(atob(b).split("").map(function (c) { return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2); }).join(""));
+      return JSON.parse(json);
+    } catch (e) { return null; }
+  }
+  function looksLikeJwt(v) { return typeof v === "string" && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(v); }
+  function getUserId() {
+    if (window.__klgUserId) return window.__klgUserId;
+    var uid = "";
+    // 1) known globals
+    try { if (window.__USER__ && window.__USER__.id) uid = window.__USER__.id; } catch (e) {}
+    // 2) scan localStorage for a GHL JWT and read the user id from it
+    if (!uid) {
+      try {
+        for (var i = 0; i < localStorage.length && !uid; i++) {
+          var val = localStorage.getItem(localStorage.key(i));
+          if (!val) continue;
+          var jwt = null;
+          if (looksLikeJwt(val)) jwt = val;
+          else { try { var o = JSON.parse(val); var cand = o && (o.token || o.access_token || o.accessToken || o.jwt || (o.value && (o.value.token || o.value.access_token))); if (looksLikeJwt(cand)) jwt = cand; } catch (e) {} }
+          if (!jwt) continue;
+          var p = decodeJwtPayload(jwt);
+          if (p) { uid = p.user_id || p.userId || p.sub || (p.user && p.user.id) || ""; }
+        }
+      } catch (e) {}
+    }
+    if (uid) window.__klgUserId = uid;
+    return uid;
+  }
 
   function micSvg(c) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="' + c + '"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>'; }
   function checkSvg(c) { return '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'; }
@@ -80,7 +112,6 @@
   }
 
   function isVisible(el) { if (!el) return false; if (el.offsetParent !== null) return true; var r = el.getClientRects(); return !!(r && r.length); }
-
   function activeInternalInput() {
     var inputs = document.querySelectorAll("textarea,[contenteditable='true']");
     for (var i = 0; i < inputs.length; i++) {
@@ -141,14 +172,10 @@
     for (var i = 0; i < auds.length; i++) { if (auds[i].getAttribute("src") === href) return true; }
     return false;
   }
-  // Is this link inside the left inbox list? (that area has many conversation-row links)
   function inInboxList(el) {
     var node = el;
     for (var i = 0; i < 12 && node; i++) {
-      if (node.querySelectorAll) {
-        var rows = node.querySelectorAll('a[href*="/conversations/conversations/"]');
-        if (rows.length >= 3) return true;
-      }
+      if (node.querySelectorAll) { var rows = node.querySelectorAll('a[href*="/conversations/conversations/"]'); if (rows.length >= 3) return true; }
       node = node.parentElement;
     }
     return false;
@@ -184,8 +211,8 @@
       var href = a.getAttribute && a.getAttribute("href") || "";
       if (!isAudioHref(href)) continue;
       a.style.display = "none";
-      if (chipExistsForDoc(href)) continue;       // one player per unique audio url
-      if (inInboxList(a)) continue;               // never in the left conversation list
+      if (chipExistsForDoc(href)) continue;
+      if (inInboxList(a)) continue;
       if (a.parentNode) a.parentNode.insertBefore(makeChip(href), a.nextSibling);
     }
   }
