@@ -1,16 +1,15 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v11: PERFORMANCE FIX. Stop reacting to every DOM mutation (that caused a
- * runaway loop that froze GHL). Run placement + player-upgrade on a calm
- * 1-second timer with a re-entrancy guard. Same features as v10.
+ * v12: one player per note (deduped by audio URL so GHL re-renders can't
+ * stack them), borderless so it sits cleanly inside the yellow bubble.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 11;
+  var VERSION = 12;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
@@ -26,8 +25,8 @@
   function micSvg(c) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="' + c + '"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>'; }
   function checkSvg(c) { return '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'; }
   function xSvg(c) { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>'; }
-  function playSvg() { return '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'; }
-  function pauseSvg() { return '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'; }
+  function playSvg() { return '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'; }
+  function pauseSvg() { return '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'; }
   function fmt(s) { s = Math.floor(s || 0); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
 
   var AMBER = "#b45309", AMBER_BG = "#fff8e1", AMBER_BD = "#f59e0b";
@@ -144,18 +143,23 @@
   }
   var AUDIO_RE = /(\.webm|\.ogg|\.oga|\.mp3|\.m4a|\.wav)(\?|$)/i;
   function isAudioHref(href) { if (!href) return false; return AUDIO_RE.test(href) || /filesafe\.space\/[^\s]*\/media\//i.test(href); }
+  function chipExistsFor(scope, href) {
+    var auds = scope.querySelectorAll("audio.klg-audio");
+    for (var i = 0; i < auds.length; i++) { if (auds[i].getAttribute("src") === href) return true; }
+    return false;
+  }
 
   function makeChip(href) {
     var chip = document.createElement("span");
     chip.className = "klg-audio-chip";
-    chip.style.cssText = "display:inline-flex;align-items:center;gap:7px;background:" + AMBER_BG + ";border:1px solid " + AMBER_BD + ";border-radius:9px;padding:2px 8px;margin:2px 4px;vertical-align:middle";
-    var audio = document.createElement("audio"); audio.src = href; audio.preload = "metadata";
-    var play = document.createElement("button"); play.type = "button"; play.style.cssText = "border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:0;color:" + AMBER; play.innerHTML = playSvg();
-    var barWrap = document.createElement("span"); barWrap.style.cssText = "position:relative;width:84px;height:4px;background:rgba(180,83,9,.25);border-radius:2px;cursor:pointer;flex:0 0 auto";
+    chip.style.cssText = "display:inline-flex;align-items:center;gap:8px;vertical-align:middle;margin-left:8px";
+    var audio = document.createElement("audio"); audio.className = "klg-audio"; audio.src = href; audio.preload = "metadata";
+    var play = document.createElement("button"); play.type = "button"; play.style.cssText = "border:none;background:rgba(180,83,9,.15);border-radius:50%;width:26px;height:26px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;color:" + AMBER; play.innerHTML = playSvg();
+    var barWrap = document.createElement("span"); barWrap.style.cssText = "position:relative;width:96px;height:4px;background:rgba(180,83,9,.25);border-radius:2px;cursor:pointer;flex:0 0 auto";
     var barFill = document.createElement("span"); barFill.style.cssText = "position:absolute;left:0;top:0;height:100%;width:0%;background:" + AMBER + ";border-radius:2px"; barWrap.appendChild(barFill);
     var time = document.createElement("span"); time.style.cssText = "font:600 11px system-ui;color:" + AMBER + ";white-space:nowrap"; time.textContent = "0:00";
     var speed = document.createElement("button"); speed.type = "button"; speed.style.cssText = "border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:" + AMBER + ";padding:2px 5px"; var rates = [1, 1.5, 2, 0.75], ri = 0; speed.textContent = "1x";
-    var open = document.createElement("a"); open.href = href; open.target = "_blank"; open.rel = "noopener"; open.textContent = "\u2197"; open.title = "Open in new tab"; open.style.cssText = "color:" + AMBER + ";text-decoration:none;font:700 12px system-ui";
+    var open = document.createElement("a"); open.href = href; open.target = "_blank"; open.rel = "noopener"; open.textContent = "\u2197"; open.title = "Open in new tab"; open.style.cssText = "color:" + AMBER + ";text-decoration:none;font:700 12px system-ui;opacity:.7";
     play.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); if (audio.paused) audio.play(); else audio.pause(); });
     audio.addEventListener("play", function () { play.innerHTML = pauseSvg(); });
     audio.addEventListener("pause", function () { play.innerHTML = playSvg(); });
@@ -174,25 +178,13 @@
     var links = scope.querySelectorAll("a[href]");
     for (var i = 0; i < links.length; i++) {
       var a = links[i];
-      if (a.__klgDone) continue;
       var href = a.getAttribute("href") || "";
       if (!isAudioHref(href)) continue;
-      a.__klgDone = true;
-      if (a.parentNode) a.parentNode.insertBefore(makeChip(href), a.nextSibling);
+      // hide the raw link either way
       a.style.display = "none";
-    }
-    var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
-    var hits = [], node;
-    while ((node = walker.nextNode())) { var v = node.nodeValue || ""; if (v.indexOf("Voice note") > -1 && /https?:\/\//.test(v)) hits.push(node); }
-    for (var h = 0; h < hits.length; h++) {
-      var tn = hits[h]; var parent = tn.parentElement;
-      if (!parent || parent.__klgAudioDone) continue;
-      if (parent.childElementCount > 1) continue;
-      if ((parent.textContent || "").length > 220) continue;
-      var m = (tn.nodeValue || "").match(/(https?:\/\/[^\s\)\]]+)/); if (!m) continue;
-      var url = m[1]; parent.__klgAudioDone = true;
-      tn.nodeValue = tn.nodeValue.replace(url, "").replace(/\s+$/, "") + " ";
-      if (parent.parentNode) parent.parentNode.insertBefore(makeChip(url), parent.nextSibling);
+      // ONE player per unique audio url across the feed (survives GHL re-renders)
+      if (chipExistsFor(scope, href)) continue;
+      if (a.parentNode) a.parentNode.insertBefore(makeChip(href), a.nextSibling);
     }
   }
 
