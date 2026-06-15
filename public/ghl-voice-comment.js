@@ -1,16 +1,16 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v10: slim custom audio player (play/seek/time + speed toggle) replacing the
- * bulky native control; type text in the comment box and it is sent together
- * with the voice note.
+ * v11: PERFORMANCE FIX. Stop reacting to every DOM mutation (that caused a
+ * runaway loop that froze GHL). Run placement + player-upgrade on a calm
+ * 1-second timer with a re-entrancy guard. Same features as v10.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 10;
+  var VERSION = 11;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
@@ -135,7 +135,6 @@
     if (w.parentNode !== target) { try { target.insertBefore(w, before); } catch (e) { footer.insertBefore(w, footer.firstChild); } }
   }
 
-  // ---- inline player -------------------------------------------------------
   function feedScope() {
     var comp = activeInternalInput() || document.querySelector("textarea,[contenteditable='true']");
     if (!comp) return null;
@@ -150,18 +149,13 @@
     var chip = document.createElement("span");
     chip.className = "klg-audio-chip";
     chip.style.cssText = "display:inline-flex;align-items:center;gap:7px;background:" + AMBER_BG + ";border:1px solid " + AMBER_BD + ";border-radius:9px;padding:2px 8px;margin:2px 4px;vertical-align:middle";
-
     var audio = document.createElement("audio"); audio.src = href; audio.preload = "metadata";
-    var play = document.createElement("button"); play.type = "button";
-    play.style.cssText = "border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:0;color:" + AMBER;
-    play.innerHTML = playSvg();
+    var play = document.createElement("button"); play.type = "button"; play.style.cssText = "border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:0;color:" + AMBER; play.innerHTML = playSvg();
     var barWrap = document.createElement("span"); barWrap.style.cssText = "position:relative;width:84px;height:4px;background:rgba(180,83,9,.25);border-radius:2px;cursor:pointer;flex:0 0 auto";
     var barFill = document.createElement("span"); barFill.style.cssText = "position:absolute;left:0;top:0;height:100%;width:0%;background:" + AMBER + ";border-radius:2px"; barWrap.appendChild(barFill);
     var time = document.createElement("span"); time.style.cssText = "font:600 11px system-ui;color:" + AMBER + ";white-space:nowrap"; time.textContent = "0:00";
-    var speed = document.createElement("button"); speed.type = "button"; speed.style.cssText = "border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:" + AMBER + ";padding:2px 5px";
-    var rates = [1, 1.5, 2, 0.75], ri = 0; speed.textContent = "1x";
+    var speed = document.createElement("button"); speed.type = "button"; speed.style.cssText = "border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:" + AMBER + ";padding:2px 5px"; var rates = [1, 1.5, 2, 0.75], ri = 0; speed.textContent = "1x";
     var open = document.createElement("a"); open.href = href; open.target = "_blank"; open.rel = "noopener"; open.textContent = "\u2197"; open.title = "Open in new tab"; open.style.cssText = "color:" + AMBER + ";text-decoration:none;font:700 12px system-ui";
-
     play.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); if (audio.paused) audio.play(); else audio.pause(); });
     audio.addEventListener("play", function () { play.innerHTML = pauseSvg(); });
     audio.addEventListener("pause", function () { play.innerHTML = playSvg(); });
@@ -170,13 +164,13 @@
     audio.addEventListener("timeupdate", function () { if (audio.duration && isFinite(audio.duration)) { barFill.style.width = (audio.currentTime / audio.duration * 100) + "%"; time.textContent = fmt(audio.currentTime) + " / " + fmt(audio.duration); } else { time.textContent = fmt(audio.currentTime); } });
     barWrap.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); var r = barWrap.getBoundingClientRect(); var p = (e.clientX - r.left) / r.width; if (audio.duration && isFinite(audio.duration)) audio.currentTime = Math.max(0, Math.min(1, p)) * audio.duration; });
     speed.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); ri = (ri + 1) % rates.length; audio.playbackRate = rates[ri]; speed.textContent = rates[ri] + "x"; });
-
     chip.appendChild(play); chip.appendChild(barWrap); chip.appendChild(time); chip.appendChild(speed); chip.appendChild(open); chip.appendChild(audio);
     return chip;
   }
 
   function upgradeAudioComments() {
     var scope = feedScope(); if (!scope) return;
+    if ((scope.textContent || "").indexOf("Voice note") === -1) return;  // cheap short-circuit
     var links = scope.querySelectorAll("a[href]");
     for (var i = 0; i < links.length; i++) {
       var a = links[i];
@@ -187,7 +181,6 @@
       if (a.parentNode) a.parentNode.insertBefore(makeChip(href), a.nextSibling);
       a.style.display = "none";
     }
-    if ((scope.textContent || "").indexOf("Voice note") === -1) return;
     var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
     var hits = [], node;
     while ((node = walker.nextNode())) { var v = node.nodeValue || ""; if (v.indexOf("Voice note") > -1 && /https?:\/\//.test(v)) hits.push(node); }
@@ -223,7 +216,7 @@
   function stopTimer() { if (timerInt) { clearInterval(timerInt); timerInt = null; } }
   function confirmRecording() {
     if (!recording) return;
-    pendingNote = readComposerNote();      // capture any typed text
+    pendingNote = readComposerNote();
     recording = false; pendingSend = true; stopTimer();
     renderStatus("Sending…", "#2563eb");
     try { mediaRecorder && mediaRecorder.stop(); } catch (e) {}
@@ -249,9 +242,14 @@
       .catch(function (err) { renderStatus("Network blocked", "#dc2626", 5000); console.error("[kleegr-voice] network error:", err); });
   }
 
-  function tick() { placeWrap(); upgradeAudioComments(); }
-  var obs = new MutationObserver(function () { tick(); });
-  obs.observe(document.documentElement, { childList: true, subtree: true });
-  setInterval(tick, 1500);
+  // ---- boot: calm 1s timer only (NO MutationObserver) ---------------------
+  var ticking = false;
+  function tick() {
+    if (ticking) return;
+    ticking = true;
+    try { placeWrap(); upgradeAudioComments(); } catch (e) { /* never break the loop */ }
+    ticking = false;
+  }
+  setInterval(tick, 1000);
   tick();
 })();
