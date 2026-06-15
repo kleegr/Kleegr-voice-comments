@@ -1,28 +1,22 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v8: NON-DESTRUCTIVE inline player. Only adds a small player next to the
- * voice-note text (never replaces elements), scoped to the conversation feed
- * (never the inbox list). Adds an ↗ open-link fallback to test playback.
+ * v9: GHL auto-linkifies the audio URL into an <a>. Detect that link in the
+ * conversation feed and swap in a real inline <audio> player (keeping a tiny
+ * ↗ open-link fallback). Non-destructive; never touches the inbox list.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 8;
+  var VERSION = 9;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
 
-  var recording = false;
-  var pendingSend = false;
-  var mediaRecorder = null;
-  var chunks = [];
-  var timerInt = null;
-  var startedAt = 0;
-  var lastStream = null;
+  var recording = false, pendingSend = false, mediaRecorder = null, chunks = [], timerInt = null, startedAt = 0, lastStream = null;
 
   function getLocationId() {
     var p = location.pathname || "";
@@ -71,8 +65,7 @@
     var w = target || wrap(); if (!w) return;
     w.innerHTML = "";
     var btn = document.createElement("button");
-    btn.type = "button";
-    btn.title = "Record a voice note (internal comment)";
+    btn.type = "button"; btn.title = "Record a voice note (internal comment)";
     btn.style.cssText = "display:inline-flex;align-items:center;justify-content:center;height:34px;width:34px;border:none;border-radius:50%;background:transparent;cursor:pointer;";
     btn.innerHTML = micSvg(AMBER);
     btn.addEventListener("mouseenter", function () { btn.style.background = "rgba(180,83,9,0.10)"; });
@@ -92,8 +85,7 @@
       '<span id="kleegr-voice-cancel" title="Cancel" style="cursor:pointer;display:inline-flex;padding:2px">' + xSvg(AMBER) + '</span>' +
       '<span id="kleegr-voice-send" title="Send as internal comment" style="cursor:pointer;display:inline-flex;padding:2px">' + checkSvg("#15803d") + '</span>' +
       '</span>';
-    var c = document.getElementById("kleegr-voice-cancel");
-    var s = document.getElementById("kleegr-voice-send");
+    var c = document.getElementById("kleegr-voice-cancel"); var s = document.getElementById("kleegr-voice-send");
     if (c) c.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); cancelRecording(); });
     if (s) s.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); confirmRecording(); });
   }
@@ -142,50 +134,55 @@
     if (w.parentNode !== target) { try { target.insertBefore(w, before); } catch (e) { footer.insertBefore(w, footer.firstChild); } }
   }
 
-  // ---- NON-DESTRUCTIVE inline player, scoped to the conversation feed -----
+  // ---- feed scope (excludes the left inbox list) --------------------------
   function feedScope() {
-    // climb from the composer to a tall column (feed + composer); excludes the
-    // left inbox list which is a sibling, not an ancestor.
     var comp = activeInternalInput() || document.querySelector("textarea,[contenteditable='true']");
     if (!comp) return null;
     var node = comp;
-    for (var i = 0; i < 10 && node; i++) {
-      if (node.getBoundingClientRect().height > 400) return node;
-      node = node.parentElement;
-    }
+    for (var i = 0; i < 10 && node; i++) { if (node.getBoundingClientRect().height > 400) return node; node = node.parentElement; }
     return node || null;
   }
+  var AUDIO_RE = /(\.webm|\.ogg|\.oga|\.mp3|\.m4a|\.wav)(\?|$)/i;
+  function isAudioHref(href) {
+    if (!href) return false;
+    return AUDIO_RE.test(href) || /filesafe\.space\/[^\s]*\/media\//i.test(href);
+  }
+  function makeChip(href) {
+    var chip = document.createElement("span");
+    chip.className = "klg-audio-chip";
+    chip.style.cssText = "display:inline-flex;align-items:center;gap:6px;background:" + AMBER_BG + ";border:1px solid " + AMBER_BD + ";border-radius:10px;padding:3px 8px;margin:2px 4px;vertical-align:middle";
+    chip.innerHTML = '<audio controls preload="metadata" src="' + href + '" style="height:30px;width:180px"></audio>';
+    return chip;
+  }
   function upgradeAudioComments() {
-    var scope = feedScope();
-    if (!scope) return;
+    var scope = feedScope(); if (!scope) return;
+    // Case A: GHL linkified the URL into an <a>
+    var links = scope.querySelectorAll("a[href]");
+    for (var i = 0; i < links.length; i++) {
+      var a = links[i];
+      if (a.__klgDone) continue;
+      var href = a.getAttribute("href") || "";
+      if (!isAudioHref(href)) continue;
+      a.__klgDone = true;
+      if (a.parentNode) a.parentNode.insertBefore(makeChip(href), a.nextSibling);
+      a.textContent = "\u2197";
+      a.style.cssText = "margin-left:4px;color:" + AMBER + ";text-decoration:none;font:700 13px system-ui";
+      a.title = "Open audio in new tab";
+    }
+    // Case B: plain-text URL (not linkified) — fallback
     if ((scope.textContent || "").indexOf("Voice note") === -1) return;
     var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
     var hits = [], node;
-    while ((node = walker.nextNode())) {
-      var v = node.nodeValue || "";
-      if (v.indexOf("Voice note") > -1 && /https?:\/\//.test(v)) hits.push(node);
-    }
-    for (var i = 0; i < hits.length; i++) {
-      var tn = hits[i];
-      var parent = tn.parentElement;
+    while ((node = walker.nextNode())) { var v = node.nodeValue || ""; if (v.indexOf("Voice note") > -1 && /https?:\/\//.test(v)) hits.push(node); }
+    for (var h = 0; h < hits.length; h++) {
+      var tn = hits[h]; var parent = tn.parentElement;
       if (!parent || parent.__klgAudioDone) continue;
-      // SAFETY: only act on a small leaf-ish text element — never a container
       if (parent.childElementCount > 1) continue;
       if ((parent.textContent || "").length > 220) continue;
-      // already has a chip right after?
-      if (parent.nextSibling && parent.nextSibling.classList && parent.nextSibling.classList.contains("klg-audio-chip")) { parent.__klgAudioDone = true; continue; }
-      var m = (tn.nodeValue || "").match(/(https?:\/\/[^\s\)\]]+)/);
-      if (!m) continue;
-      var url = m[1];
-      parent.__klgAudioDone = true;
-      // strip the raw URL from the visible text (keep the label), non-destructive
+      var m = (tn.nodeValue || "").match(/(https?:\/\/[^\s\)\]]+)/); if (!m) continue;
+      var url = m[1]; parent.__klgAudioDone = true;
       tn.nodeValue = tn.nodeValue.replace(url, "").replace(/\s+$/, "") + " ";
-      var chip = document.createElement("span");
-      chip.className = "klg-audio-chip";
-      chip.style.cssText = "display:inline-flex;align-items:center;gap:6px;background:" + AMBER_BG + ";border:1px solid " + AMBER_BD + ";border-radius:10px;padding:3px 8px;margin-left:4px;vertical-align:middle";
-      chip.innerHTML = '<audio controls preload="metadata" src="' + url + '" style="height:30px;width:170px"></audio>' +
-        '<a href="' + url + '" target="_blank" rel="noopener" title="Open audio in new tab" style="color:' + AMBER + ';text-decoration:none;font:700 13px system-ui">↗</a>';
-      if (parent.parentNode) parent.parentNode.insertBefore(chip, parent.nextSibling);
+      if (parent.parentNode) parent.parentNode.insertBefore(makeChip(url), parent.nextSibling);
     }
   }
 
@@ -211,9 +208,7 @@
   function cancelRecording() { recording = false; pendingSend = false; stopTimer(); try { mediaRecorder && mediaRecorder.stop(); } catch (e) {} renderIdle(); }
 
   function send(blob) {
-    var conversationId = getConversationId();
-    var contactId = getContactId();
-    var locationId = getLocationId();
+    var conversationId = getConversationId(), contactId = getContactId(), locationId = getLocationId();
     if (!conversationId && !contactId) { renderStatus("Can’t find the contact on this screen", "#dc2626", 5000); console.error("[kleegr-voice] no ids; url=", location.href); return; }
     var fd = new FormData();
     fd.append("file", blob, "voice-note.webm");
