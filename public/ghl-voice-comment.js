@@ -1,18 +1,18 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * Records a voice note in the GHL conversation and posts it as an
- * InternalComment (audio attached) via the Vercel backend.
+ * Records a voice note and posts it as an InternalComment (audio attached)
+ * via the Vercel backend. Then upgrades the posted “Voice note <url>” comment
+ * into an inline yellow <audio> player (GHL won’t render the audio itself).
  *
- * v5: yellow recording bar (timer + waveform + cancel/send), placed next to
- * the emoji. Shows failure reasons on-screen so issues are self-diagnosing.
+ * v6: inline audio player for posted voice-note comments.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 5;
+  var VERSION = 6;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
@@ -63,7 +63,6 @@
   function checkSvg(c) { return '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'; }
   function xSvg(c) { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>'; }
 
-  // amber palette = “internal comment”
   var AMBER = "#b45309", AMBER_BG = "#fff8e1", AMBER_BD = "#f59e0b";
 
   function injectStyleOnce() {
@@ -79,7 +78,6 @@
     document.head.appendChild(s);
   }
 
-  // ---- render states into the wrap ----------------------------------------
   function wrap() { return document.getElementById("kleegr-voice-wrap"); }
 
   function renderIdle() {
@@ -116,8 +114,7 @@
   function renderStatus(text, color, revertMs) {
     var w = wrap(); if (!w) return;
     w.innerHTML =
-      '<span style="display:inline-flex;align-items:center;height:34px;padding:0 12px;border-radius:18px;background:' + AMBER_BG + ';border:1px solid ' + AMBER_BD + ';color:' + (color || AMBER) + ';font:600 12px system-ui,sans-serif;max-width:340px">' +
-      text + '</span>';
+      '<span style="display:inline-flex;align-items:center;height:34px;padding:0 12px;border-radius:18px;background:' + AMBER_BG + ';border:1px solid ' + AMBER_BD + ';color:' + (color || AMBER) + ';font:600 12px system-ui,sans-serif;max-width:340px">' + text + '</span>';
     if (revertMs) setTimeout(function () { if (!recording) renderIdle(); }, revertMs);
   }
 
@@ -167,24 +164,47 @@
     }
   }
 
+  // ---- turn posted “Voice note <url>” comments into inline players ---------
+  function upgradeAudioComments() {
+    var body = document.body;
+    if (!body || (body.textContent || "").indexOf("Voice note") === -1) return;
+    var nodes = document.querySelectorAll("span,div,p");
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (el.__klgAudioDone) continue;
+      var txt = el.textContent || "";
+      if (txt.indexOf("Voice note") === -1) continue;
+      var um = txt.match(/(https?:\/\/[^\s\)\]]+)/);
+      if (!um) continue;
+      // use the tightest element that holds both the label and the url
+      var childHas = false;
+      for (var c = 0; c < el.children.length; c++) {
+        var ct = el.children[c].textContent || "";
+        if (ct.indexOf("Voice note") > -1 && /https?:\/\//.test(ct)) { childHas = true; break; }
+      }
+      if (childHas) continue;
+      el.__klgAudioDone = true;
+      el.innerHTML =
+        '<span style="display:inline-flex;align-items:center;gap:8px;background:' + AMBER_BG + ';border:1px solid ' + AMBER_BD + ';border-radius:12px;padding:5px 10px;max-width:260px">' +
+        '<span style="font-size:15px">\uD83C\uDFA4</span>' +
+        '<audio controls preload="none" src="' + um[1] + '" style="height:30px;width:190px"></audio>' +
+        '</span>';
+    }
+  }
+
   // ---- recording -----------------------------------------------------------
   function startRecording() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { renderStatus("Mic not supported here", "#dc2626", 3000); return; }
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
-      lastStream = stream;
-      chunks = [];
+      lastStream = stream; chunks = [];
       var mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
         : (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "");
       mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       mediaRecorder.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
       mediaRecorder.onstop = function () {
         if (lastStream) lastStream.getTracks().forEach(function (t) { t.stop(); });
-        if (pendingSend) {
-          var blob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
-          send(blob);
-        } else {
-          renderIdle();
-        }
+        if (pendingSend) { send(new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" })); }
+        else { renderIdle(); }
       };
       mediaRecorder.start();
       recording = true; pendingSend = false; startedAt = Date.now();
@@ -198,7 +218,6 @@
   }
 
   function stopTimer() { if (timerInt) { clearInterval(timerInt); timerInt = null; } }
-
   function confirmRecording() {
     if (!recording) return;
     recording = false; pendingSend = true; stopTimer();
@@ -237,14 +256,11 @@
           console.error("[kleegr-voice] post failed:", res.j && res.j.error);
         }
       })
-      .catch(function (err) {
-        renderStatus("Network blocked", "#dc2626", 5000);
-        console.error("[kleegr-voice] network error:", err);
-      });
+      .catch(function (err) { renderStatus("Network blocked", "#dc2626", 5000); console.error("[kleegr-voice] network error:", err); });
   }
 
   // ---- boot ----------------------------------------------------------------
-  function tick() { placeWrap(); }
+  function tick() { placeWrap(); upgradeAudioComments(); }
   var obs = new MutationObserver(function () { tick(); });
   obs.observe(document.documentElement, { childList: true, subtree: true });
   setInterval(tick, 1500);

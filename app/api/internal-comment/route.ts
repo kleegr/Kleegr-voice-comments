@@ -3,14 +3,16 @@
  *
  * Receives a recorded voice note from the GHL custom-JS mic button, uploads it
  * to the GHL media library, and posts it as an InternalComment on the contact's
- * conversation.
+ * conversation. The media URL is included in the message text so the custom JS
+ * can render an inline <audio> player (GHL does not render attachments as a
+ * player on internal comments).
  *
  * Multipart form fields:
  *   - file           (required)  the audio blob
  *   - contactId      (optional)  if known
  *   - conversationId (optional)  resolved to contactId server-side if contactId absent
  *   - userId         (optional)  GHL user the comment is attributed to
- *   - note           (optional)  text shown with the voice note (default "🎤 Voice note")
+ *   - note           (optional)  text shown with the voice note
  *
  * Auth: server-side PIT in env GHL_PIT. The browser never sees the token.
  */
@@ -49,10 +51,7 @@ export async function POST(req: Request) {
         const note = ((form.get("note") as string | null) || "").trim();
 
         if (!file) {
-            return NextResponse.json(
-                { success: false, error: "file is required" },
-                { status: 400, headers: cors }
-            );
+            return NextResponse.json({ success: false, error: "file is required" }, { status: 400, headers: cors });
         }
         if (!contactId && !conversationId) {
             return NextResponse.json(
@@ -61,7 +60,6 @@ export async function POST(req: Request) {
             );
         }
 
-        // Resolve contactId from conversationId if needed.
         if (!contactId && conversationId) {
             contactId = await getConversationContactId(token, conversationId);
             if (!contactId) {
@@ -84,7 +82,10 @@ export async function POST(req: Request) {
             );
         }
 
-        const message = note || "🎤 Voice note";
+        // Include the URL in the text so the custom JS can render an inline player.
+        // (GHL does not render attachments as a player on internal comments.)
+        const label = note || "\uD83C\uDFA4 Voice note";
+        const message = `${label} ${mediaUrl}`;
         const result = await sendInternalComment(token, {
             contactId,
             message,
