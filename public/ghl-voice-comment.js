@@ -2,17 +2,17 @@
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
  * Records a voice note and posts it as an InternalComment (audio attached)
- * via the Vercel backend. Then upgrades the posted “Voice note <url>” comment
- * into an inline yellow <audio> player (GHL won’t render the audio itself).
+ * via the Vercel backend, then renders posted notes as inline yellow players.
  *
- * v6: inline audio player for posted voice-note comments.
+ * v7: only show the mic when the Internal Comment box is the visible, active,
+ * expanded composer (never on regular WhatsApp messages, never when minimized).
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 6;
+  var VERSION = 7;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
@@ -80,8 +80,8 @@
 
   function wrap() { return document.getElementById("kleegr-voice-wrap"); }
 
-  function renderIdle() {
-    var w = wrap(); if (!w) return;
+  function renderIdle(target) {
+    var w = target || wrap(); if (!w) return;
     w.innerHTML = "";
     var btn = document.createElement("button");
     btn.type = "button";
@@ -115,27 +115,40 @@
     var w = wrap(); if (!w) return;
     w.innerHTML =
       '<span style="display:inline-flex;align-items:center;height:34px;padding:0 12px;border-radius:18px;background:' + AMBER_BG + ';border:1px solid ' + AMBER_BD + ';color:' + (color || AMBER) + ';font:600 12px system-ui,sans-serif;max-width:340px">' + text + '</span>';
-    if (revertMs) setTimeout(function () { if (!recording) renderIdle(); }, revertMs);
+    if (revertMs) setTimeout(function () { if (!recording && wrap()) renderIdle(); }, revertMs);
   }
 
-  // ---- placement -----------------------------------------------------------
-  function findInternalCommentFooter() {
-    var nodes = document.querySelectorAll("textarea,[contenteditable='true'],[placeholder]");
-    for (var i = 0; i < nodes.length; i++) {
-      var ph = (nodes[i].getAttribute && nodes[i].getAttribute("placeholder")) || "";
-      var tx = ph || nodes[i].textContent || "";
-      if (/internal comment/i.test(tx)) {
-        var card = nodes[i];
-        for (var j = 0; j < 9 && card; j++) {
-          var send = card.querySelector("#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']");
-          if (send) {
-            var bar = send.parentElement;
-            for (var k = 0; k < 5 && bar; k++) { if (bar.children && bar.children.length >= 2) return bar; bar = bar.parentElement; }
-            return send.parentElement;
-          }
-          card = card.parentElement;
-        }
+  // ---- detect the VISIBLE, ACTIVE, EXPANDED Internal Comment composer -----
+  function isVisible(el) {
+    if (!el) return false;
+    if (el.offsetParent !== null) return true;
+    var r = el.getClientRects();
+    return !!(r && r.length);
+  }
+  function activeInternalInput() {
+    var inputs = document.querySelectorAll("textarea,[contenteditable='true']");
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i];
+      if (!isVisible(el)) continue;
+      var ph = "";
+      if (el.getAttribute) ph = (el.getAttribute("placeholder") || el.getAttribute("data-placeholder") || el.getAttribute("aria-label") || "");
+      if (!/internal comment/i.test(ph)) continue;
+      // require the box to be expanded (not the minimized one-line bar)
+      if (el.getBoundingClientRect().height < 60) return null;
+      return el;
+    }
+    return null;
+  }
+  function footerFrom(el) {
+    var card = el;
+    for (var j = 0; j < 9 && card; j++) {
+      var send = card.querySelector("#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']");
+      if (send) {
+        var bar = send.parentElement;
+        for (var k = 0; k < 5 && bar; k++) { if (bar.children && bar.children.length >= 2) return bar; bar = bar.parentElement; }
+        return send.parentElement;
       }
+      card = card.parentElement;
     }
     return null;
   }
@@ -143,23 +156,22 @@
   function placeWrap() {
     if (recording) return;
     var w = wrap();
+    var input = activeInternalInput();
+    if (!input) { if (w) w.remove(); return; }          // not on internal comment -> no mic
+    var footer = footerFrom(input);
+    if (!footer) { if (w) w.remove(); return; }
     if (!w) {
       w = document.createElement("span");
       w.id = "kleegr-voice-wrap";
       w.style.cssText = "display:inline-flex;align-items:center;vertical-align:middle";
-      document.body.appendChild(w);
-      w.style.position = "fixed"; w.style.right = "18px"; w.style.bottom = "74px"; w.style.zIndex = "99999";
-      renderIdle();
+      renderIdle(w);
     }
-    var footer = findInternalCommentFooter();
-    if (!footer) return;
     var send = footer.querySelector("#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']");
     var leftGroup = footer.firstElementChild;
     var target, before;
     if (leftGroup && send && !leftGroup.contains(send)) { target = leftGroup; before = leftGroup.firstChild; }
     else { target = footer; before = footer.firstChild; }
     if (w.parentNode !== target) {
-      w.style.position = ""; w.style.right = ""; w.style.bottom = ""; w.style.zIndex = "";
       try { target.insertBefore(w, before); } catch (e) { footer.insertBefore(w, footer.firstChild); }
     }
   }
@@ -176,7 +188,6 @@
       if (txt.indexOf("Voice note") === -1) continue;
       var um = txt.match(/(https?:\/\/[^\s\)\]]+)/);
       if (!um) continue;
-      // use the tightest element that holds both the label and the url
       var childHas = false;
       for (var c = 0; c < el.children.length; c++) {
         var ct = el.children[c].textContent || "";
