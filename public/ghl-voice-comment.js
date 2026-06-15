@@ -1,16 +1,16 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v13: hide the raw audio link instantly via CSS (no URL flash), and do a
- * quick burst of upgrade checks right after sending so the player appears
- * almost immediately. One player per note, borderless, 1s calm timer.
+ * v14: render players as soon as a conversation opens (anchor to the largest
+ * visible composer, not the internal-comment box specifically). Hide raw link
+ * via CSS, post-send burst, one player per note, borderless, 1s calm timer.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   // ---- CONFIG -------------------------------------------------------------
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 13;
+  var VERSION = 14;
   // -------------------------------------------------------------------------
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
@@ -36,7 +36,6 @@
     if (document.getElementById("kleegr-voice-style")) return;
     var s = document.createElement("style"); s.id = "kleegr-voice-style";
     s.textContent =
-      // hide the raw audio link the instant GHL renders it (no URL flash)
       'a[href$=".webm"],a[href$=".ogg"],a[href$=".oga"],a[href$=".mp3"],a[href$=".m4a"],a[href$=".wav"]{display:none!important}' +
       ".klg-wave{display:inline-flex;align-items:center;gap:2px;height:16px}" +
       ".klg-wave i{display:inline-block;width:2px;height:5px;background:" + AMBER + ";border-radius:1px;animation:klgwave .9s ease-in-out infinite}" +
@@ -83,6 +82,8 @@
   }
 
   function isVisible(el) { if (!el) return false; if (el.offsetParent !== null) return true; var r = el.getClientRects(); return !!(r && r.length); }
+
+  // The active Internal Comment composer (for the mic). Must be visible + expanded.
   function activeInternalInput() {
     var inputs = document.querySelectorAll("textarea,[contenteditable='true']");
     for (var i = 0; i < inputs.length; i++) {
@@ -94,6 +95,19 @@
       return el;
     }
     return null;
+  }
+  // The largest visible composer (message OR internal) — used to locate the feed.
+  function conversationComposer() {
+    var inputs = document.querySelectorAll("textarea,[contenteditable='true']");
+    var best = null, bestArea = 0;
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i];
+      if (!isVisible(el)) continue;
+      var r = el.getBoundingClientRect();
+      var area = (r.width || 0) * (r.height || 0);
+      if (area > bestArea) { bestArea = area; best = el; }
+    }
+    return best;
   }
   function readComposerNote() {
     var el = activeInternalInput(); if (!el) return "";
@@ -137,7 +151,7 @@
   }
 
   function feedScope() {
-    var comp = activeInternalInput() || document.querySelector("textarea,[contenteditable='true']");
+    var comp = conversationComposer();
     if (!comp) return null;
     var node = comp;
     for (var i = 0; i < 10 && node; i++) { if (node.getBoundingClientRect().height > 400) return node; node = node.parentElement; }
@@ -176,14 +190,14 @@
 
   function upgradeAudioComments() {
     var scope = feedScope(); if (!scope) return;
-    if ((scope.textContent || "").indexOf("Voice note") === -1) return;  // cheap short-circuit
+    if ((scope.textContent || "").indexOf("Voice note") === -1) return;
     var links = scope.querySelectorAll("a[href]");
     for (var i = 0; i < links.length; i++) {
       var a = links[i];
       var href = a.getAttribute("href") || "";
       if (!isAudioHref(href)) continue;
-      a.style.display = "none"; // belt-and-suspenders with the CSS rule
-      if (chipExistsFor(scope, href)) continue;  // one player per unique audio url
+      a.style.display = "none";
+      if (chipExistsFor(scope, href)) continue;
       if (a.parentNode) a.parentNode.insertBefore(makeChip(href), a.nextSibling);
     }
   }
@@ -231,7 +245,6 @@
         if (res.j && res.j.success) {
           if (pendingNote) clearComposer(); pendingNote = "";
           renderStatus("Posted ✓", "#15803d", 2500);
-          // quick burst so the player appears almost immediately (no waiting for the 1s tick)
           [150, 400, 800, 1400, 2200].forEach(function (d) { setTimeout(function () { try { upgradeAudioComments(); } catch (e) {} }, d); });
         }
         else { var msg = (res.j && res.j.error) ? String(res.j.error).slice(0, 80) : "error"; renderStatus("Failed: " + msg, "#dc2626", 6000); console.error("[kleegr-voice] post failed:", res.j && res.j.error); }
@@ -239,13 +252,13 @@
       .catch(function (err) { renderStatus("Network blocked", "#dc2626", 5000); console.error("[kleegr-voice] network error:", err); });
   }
 
-  // ---- boot: hide-link CSS now; calm 1s timer (NO MutationObserver) -------
+  // ---- boot ----------------------------------------------------------------
   injectStyleOnce();
   var ticking = false;
   function tick() {
     if (ticking) return;
     ticking = true;
-    try { placeWrap(); upgradeAudioComments(); } catch (e) { /* never break the loop */ }
+    try { placeWrap(); upgradeAudioComments(); } catch (e) {}
     ticking = false;
   }
   setInterval(tick, 1000);
