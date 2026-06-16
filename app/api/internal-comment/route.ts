@@ -1,9 +1,8 @@
 /**
  * POST /api/internal-comment
  *
- * Multi-subaccount: resolves per-location GHL token from Supabase. Posts an
- * InternalComment with the media URL in text (player needs it). Passes userId
- * for avatar attribution. Falls back cleanly if userId is invalid.
+ * URL on its own line so inbox preview shows just the label.
+ * Uses userId from exposeSessionDetails for proper avatar.
  */
 
 import { NextResponse } from "next/server";
@@ -63,13 +62,15 @@ export async function POST(req: Request) {
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            const message = note ? `${note}\n${voiceLabel} ${mediaUrl}` : `${voiceLabel} ${mediaUrl}`;
+            // Label on first line, URL on second line. Preview should show just the label.
+            let message = note
+                ? `${note}\n${voiceLabel}\n${mediaUrl}`
+                : `${voiceLabel}\n${mediaUrl}`;
             try {
                 return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] });
             } catch (e: any) {
-                // If userId is invalid, retry without it
                 if (userId && !isAuthError(e)) {
-                    console.log("[internal-comment] userId failed, retrying without:", e?.response?.data || e?.message);
+                    console.log("[internal-comment] userId failed, retrying without");
                     return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] });
                 }
                 throw e;

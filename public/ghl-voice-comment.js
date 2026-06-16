@@ -1,10 +1,9 @@
 /* =========================================================================
- * Kleegr — Voice note for GHL Internal Comments   v21
+ * Kleegr — Voice note for GHL Internal Comments   v22
  * -------------------------------------------------------------------------
- * Uses GHL's official window.exposeSessionDetails(APP_ID) to get the real
- * logged-in userId. Sends encrypted session to our server for decryption.
- * The userId is then passed when posting internal comments so GHL shows
- * the correct user initials/avatar. No prompts, fully automatic.
+ * v22: adds delete (✕) button on each player to hide the voice note.
+ * GHL has no delete-message API, so this is a cosmetic hide (removes from
+ * DOM). Also uses exposeSessionDetails for proper NH initials.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
@@ -12,7 +11,7 @@
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var DECRYPT_ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID = "69d29cd45ed1d5be94e6e582";
-  var VERSION = 21;
+  var VERSION = 22;
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
@@ -31,14 +30,11 @@
 
   function resolveUserSession() {
     if (getCachedUserId() || _resolving) return;
-    if (typeof window.exposeSessionDetails !== "function") {
-      console.log("[kleegr-voice] exposeSessionDetails not available yet, will retry");
-      return;
-    }
+    if (typeof window.exposeSessionDetails !== "function") return;
     _resolving = true;
     try {
       window.exposeSessionDetails(APP_ID).then(function (encrypted) {
-        if (!encrypted) { _resolving = false; console.log("[kleegr-voice] exposeSessionDetails returned empty"); return; }
+        if (!encrypted) { _resolving = false; return; }
         fetch(DECRYPT_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -49,14 +45,12 @@
           _resolving = false;
           if (data && data.userId) {
             cacheUserId(data.userId);
-            console.log("[kleegr-voice] resolved userId via exposeSessionDetails:", data.userId, data.userName);
-          } else {
-            console.log("[kleegr-voice] decrypt-session returned no userId:", data);
+            console.log("[kleegr-voice] resolved userId:", data.userId, data.userName);
           }
         })
-        .catch(function (e) { _resolving = false; console.error("[kleegr-voice] decrypt-session error:", e); });
-      }).catch(function (e) { _resolving = false; console.error("[kleegr-voice] exposeSessionDetails error:", e); });
-    } catch (e) { _resolving = false; console.error("[kleegr-voice] exposeSessionDetails threw:", e); }
+        .catch(function (e) { _resolving = false; });
+      }).catch(function (e) { _resolving = false; });
+    } catch (e) { _resolving = false; }
   }
 
   function micSvg(c) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="' + c + '"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>'; }
@@ -64,6 +58,7 @@
   function xSvg(c) { return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>'; }
   function playSvg() { return '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'; }
   function pauseSvg() { return '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'; }
+  function trashSvg() { return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'; }
   function fmt(s) { s = Math.floor(s || 0); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
 
   var AMBER = "#b45309", AMBER_BG = "#fff8e1", AMBER_BD = "#f59e0b";
@@ -187,6 +182,27 @@
     return false;
   }
 
+  // find the GHL message bubble that contains an element
+  function findMessageBubble(el) {
+    var node = el;
+    for (var i = 0; i < 15 && node; i++) {
+      // GHL message bubbles typically have a timestamp sibling and are within a message wrapper
+      if (node.getAttribute && (node.getAttribute('class') || '').match(/message|msg-/i)) return node;
+      // fallback: look for a container that has the yellow background (internal comment)
+      var bg = node.style && node.style.background || '';
+      if (node.getBoundingClientRect && node.getBoundingClientRect().width > 100) {
+        var cs = window.getComputedStyle(node);
+        if (cs.backgroundColor && cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.backgroundColor !== 'transparent') {
+          // check if this looks like a message container (has time text nearby)
+          var txt = (node.textContent || '');
+          if (/\d{1,2}:\d{2}\s*(AM|PM)/i.test(txt) && /Voice note/i.test(txt)) return node;
+        }
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
   function makeChip(href) {
     var chip = document.createElement("span");
     chip.className = "klg-audio-chip";
@@ -198,6 +214,20 @@
     var time = document.createElement("span"); time.style.cssText = "font:600 11px system-ui;color:" + AMBER + ";white-space:nowrap"; time.textContent = "0:00";
     var speed = document.createElement("button"); speed.type = "button"; speed.style.cssText = "border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:" + AMBER + ";padding:2px 5px"; var rates = [1, 1.5, 2, 0.75], ri = 0; speed.textContent = "1x";
     var open = document.createElement("a"); open.href = href; open.target = "_blank"; open.rel = "noopener"; open.textContent = "\u2197"; open.title = "Open in new tab"; open.style.cssText = "color:" + AMBER + ";text-decoration:none;font:700 12px system-ui;opacity:.7";
+    // delete button
+    var del = document.createElement("button"); del.type = "button"; del.title = "Hide this voice note";
+    del.style.cssText = "border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:2px;color:" + AMBER + ";opacity:.5";
+    del.innerHTML = trashSvg();
+    del.addEventListener("mouseenter", function () { del.style.opacity = "1"; del.style.color = "#dc2626"; });
+    del.addEventListener("mouseleave", function () { del.style.opacity = ".5"; del.style.color = AMBER; });
+    del.addEventListener("click", function (e) {
+      e.preventDefault(); e.stopPropagation();
+      if (!confirm("Hide this voice note? (cosmetic only \u2014 GHL doesn\u2019t support deleting messages via API)")) return;
+      // hide the entire message bubble
+      var bubble = findMessageBubble(chip);
+      if (bubble) { bubble.style.display = "none"; }
+      else { chip.style.display = "none"; }
+    });
     play.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); if (audio.paused) audio.play(); else audio.pause(); });
     audio.addEventListener("play", function () { play.innerHTML = pauseSvg(); });
     audio.addEventListener("pause", function () { play.innerHTML = playSvg(); });
@@ -206,7 +236,7 @@
     audio.addEventListener("timeupdate", function () { if (audio.duration && isFinite(audio.duration)) { barFill.style.width = (audio.currentTime / audio.duration * 100) + "%"; time.textContent = fmt(audio.currentTime) + " / " + fmt(audio.duration); } else { time.textContent = fmt(audio.currentTime); } });
     barWrap.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); var r = barWrap.getBoundingClientRect(); var p = (e.clientX - r.left) / r.width; if (audio.duration && isFinite(audio.duration)) audio.currentTime = Math.max(0, Math.min(1, p)) * audio.duration; });
     speed.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); ri = (ri + 1) % rates.length; audio.playbackRate = rates[ri]; speed.textContent = rates[ri] + "x"; });
-    chip.appendChild(play); chip.appendChild(barWrap); chip.appendChild(time); chip.appendChild(speed); chip.appendChild(open); chip.appendChild(audio);
+    chip.appendChild(play); chip.appendChild(barWrap); chip.appendChild(time); chip.appendChild(speed); chip.appendChild(open); chip.appendChild(del); chip.appendChild(audio);
     return chip;
   }
 
@@ -275,7 +305,6 @@
 
   // ---- boot ----------------------------------------------------------------
   injectStyleOnce();
-  // resolve user session on load + retry every 3s until resolved (exposeSessionDetails may not be ready immediately)
   resolveUserSession();
   var retryCount = 0;
   var retryInt = setInterval(function () {
