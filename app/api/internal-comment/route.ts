@@ -1,16 +1,21 @@
 /**
  * POST /api/internal-comment
- * Pads the voice label with zero-width spaces so the inbox preview
- * truncates before reaching the URL on the second line.
+ * Stores audio URL in Supabase VoiceNote table with a short ID.
+ * Message text contains only the label + short ref (no URL = clean preview).
+ * Player resolves the ref via /api/audio/[id].
  */
 import { NextResponse } from "next/server";
+import axios from "axios";
 import { uploadAudio, sendInternalComment, getConversationContactId } from "../../../lib/ghl";
-import { getLocationTokenRow, refreshLocationToken, TokenRow, hasSupabase } from "../../../lib/token";
+import { getLocationTokenRow, refreshLocationToken, TokenRow, hasSupabase, SUPABASE_URL } from "../../../lib/token";
+import crypto from "crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept" };
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || "";
+const BASE_URL = "https://kleegr-voice-comments.vercel.app";
 
 export async function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 
@@ -19,8 +24,18 @@ function isAuthError(e: any): boolean {
     return s === 401 || s === 403 || /not accessible|unauthor/i.test(body);
 }
 
-// 60 zero-width spaces to pad past the preview's ~50-char truncation
-const ZWS_PAD = "\u200B".repeat(60);
+function genShortId(): string {
+    return crypto.randomBytes(4).toString("hex"); // 8 hex chars
+}
+
+async function storeVoiceNote(id: string, audioUrl: string, locationId: string): Promise<void> {
+    if (!SERVICE_KEY) return;
+    await axios.post(
+        `${SUPABASE_URL}/rest/v1/VoiceNote`,
+        { id, audioUrl, locationId },
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" } }
+    );
+}
 
 export async function POST(req: Request) {
     try {
@@ -38,15 +53,20 @@ export async function POST(req: Request) {
         if (!token && process.env.GHL_PIT) token = process.env.GHL_PIT;
         if (!token) return NextResponse.json({ success: false, error: "No token" }, { status: 502, headers: cors });
         const buffer = Buffer.from(await file.arrayBuffer()); const filename = file.name || "voice-note.webm"; const mime = file.type || "audio/webm";
+
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
+            const vnId = genShortId();
+            // Store the mapping so the player can resolve it
+            try { await storeVoiceNote(vnId, mediaUrl, locationId); } catch (e: any) { console.error("[internal-comment] failed to store VoiceNote:", e?.message); }
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // Label + invisible padding + newline + URL. Preview sees "Voice note" then hits the padding and truncates.
+            // NO URL in text — just the label and a short reference the player uses
             const message = note
-                ? `${note}\n${voiceLabel}${ZWS_PAD}\n${mediaUrl}`
-                : `${voiceLabel}${ZWS_PAD}\n${mediaUrl}`;
+                ? `${note}\n${voiceLabel} \u00B7 ${vnId}`
+                : `${voiceLabel} \u00B7 ${vnId}`;
             try { return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] }); }
             catch (e: any) { if (userId && !isAuthError(e)) { return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] }); } throw e; }
         }
+
         async function run(accessToken: string) {
             let contactId = contactIdIn;
             if (!contactId && conversationId) { contactId = await getConversationContactId(accessToken, conversationId); if (!contactId) throw { code: "NO_CONTACT" }; }
