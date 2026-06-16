@@ -1,16 +1,17 @@
 /**
  * POST /api/internal-comment
  *
- * Multi-subaccount: resolves a per-location GHL token from the shared Supabase
- * Token table (falls back to GHL_PIT for the demo). Uploads the audio, posts an
- * InternalComment with the media URL in the text (custom JS renders the player).
- * On an auth failure, refreshes the location token once and retries. If a
- * provided userId is invalid, retries without it so the comment still posts.
+ * Multi-subaccount: resolves a per-location GHL token from the Kleegre Apps
+ * Supabase Token table (REST API). Uploads the audio, posts an InternalComment
+ * with the media URL in the text (custom JS renders the player). On auth
+ * failure, refreshes the location token once and retries. If a provided userId
+ * is invalid, retries without it. Embeds sender's name in the message text so
+ * it's always visible regardless of GHL's avatar attribution.
  */
 
 import { NextResponse } from "next/server";
 import { uploadAudio, sendInternalComment, getConversationContactId } from "../../../lib/ghl";
-import { getLocationTokenRow, refreshLocationToken, TokenRow } from "../../../lib/token";
+import { getLocationTokenRow, refreshLocationToken, TokenRow, hasSupabase } from "../../../lib/token";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +39,7 @@ export async function POST(req: Request) {
         const contactIdIn = ((form.get("contactId") as string | null) || "").trim();
         const conversationId = ((form.get("conversationId") as string | null) || "").trim();
         const userId = ((form.get("userId") as string | null) || "").trim();
+        const userName = ((form.get("userName") as string | null) || "").trim();
         const note = ((form.get("note") as string | null) || "").trim();
         const locationId = ((form.get("locationId") as string | null) || "").trim();
 
@@ -45,17 +47,17 @@ export async function POST(req: Request) {
         if (!contactIdIn && !conversationId)
             return NextResponse.json({ success: false, error: "contactId or conversationId is required" }, { status: 400, headers: cors });
 
-        // Resolve a token: per-location token from Supabase, else the demo PIT.
+        // Resolve a token: per-location from Supabase, else fallback PIT.
         let row: TokenRow | null = null;
         let token = "";
-        if (locationId) {
+        if (locationId && hasSupabase()) {
             try { row = await getLocationTokenRow(locationId); } catch (e: any) { console.error("[internal-comment] token lookup failed:", e?.message); }
             if (row?.accessToken) token = row.accessToken;
         }
         if (!token && process.env.GHL_PIT) token = process.env.GHL_PIT;
         if (!token) {
             return NextResponse.json(
-                { success: false, error: `No GHL token for location ${locationId || "(unknown)"}. Ensure the WhatsApp app is installed there.` },
+                { success: false, error: `No GHL token for location ${locationId || "(unknown)"}. Ensure the App Directory app is installed there.` },
                 { status: 502, headers: cors }
             );
         }
@@ -66,7 +68,17 @@ export async function POST(req: Request) {
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            const message = note ? `${note}\n${voiceLabel} ${mediaUrl}` : `${voiceLabel} ${mediaUrl}`;
+            // Build the message with the sender's name so it's always visible
+            let message = "";
+            if (userName && note) {
+                message = `${userName}: ${note}\n${voiceLabel} ${mediaUrl}`;
+            } else if (userName) {
+                message = `${userName}: ${voiceLabel} ${mediaUrl}`;
+            } else if (note) {
+                message = `${note}\n${voiceLabel} ${mediaUrl}`;
+            } else {
+                message = `${voiceLabel} ${mediaUrl}`;
+            }
             try {
                 return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] });
             } catch (e: any) {
