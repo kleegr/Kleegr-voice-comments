@@ -1,8 +1,6 @@
 /**
  * POST /api/internal-comment
- * Stores audio URL in Supabase VoiceNote table with a short ID.
- * Message text contains only the label + short ref (no URL = clean preview).
- * Player resolves the ref via /api/audio/[id].
+ * ID on its own line so preview shows just "Voice note".
  */
 import { NextResponse } from "next/server";
 import axios from "axios";
@@ -15,7 +13,6 @@ export const dynamic = "force-dynamic";
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept" };
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || "";
-const BASE_URL = "https://kleegr-voice-comments.vercel.app";
 
 export async function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 
@@ -24,17 +21,12 @@ function isAuthError(e: any): boolean {
     return s === 401 || s === 403 || /not accessible|unauthor/i.test(body);
 }
 
-function genShortId(): string {
-    return crypto.randomBytes(4).toString("hex"); // 8 hex chars
-}
+function genShortId(): string { return crypto.randomBytes(4).toString("hex"); }
 
 async function storeVoiceNote(id: string, audioUrl: string, locationId: string): Promise<void> {
     if (!SERVICE_KEY) return;
-    await axios.post(
-        `${SUPABASE_URL}/rest/v1/VoiceNote`,
-        { id, audioUrl, locationId },
-        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" } }
-    );
+    await axios.post(`${SUPABASE_URL}/rest/v1/VoiceNote`, { id, audioUrl, locationId },
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" } });
 }
 
 export async function POST(req: Request) {
@@ -56,13 +48,12 @@ export async function POST(req: Request) {
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             const vnId = genShortId();
-            // Store the mapping so the player can resolve it
-            try { await storeVoiceNote(vnId, mediaUrl, locationId); } catch (e: any) { console.error("[internal-comment] failed to store VoiceNote:", e?.message); }
+            try { await storeVoiceNote(vnId, mediaUrl, locationId); } catch (e: any) { console.error("[internal-comment] storeVoiceNote:", e?.message); }
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // NO URL in text — just the label and a short reference the player uses
+            // ID on second line so preview only shows the label
             const message = note
-                ? `${note}\n${voiceLabel} \u00B7 ${vnId}`
-                : `${voiceLabel} \u00B7 ${vnId}`;
+                ? `${note}\n${voiceLabel}\nvn:${vnId}`
+                : `${voiceLabel}\nvn:${vnId}`;
             try { return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] }); }
             catch (e: any) { if (userId && !isAuthError(e)) { return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] }); } throw e; }
         }

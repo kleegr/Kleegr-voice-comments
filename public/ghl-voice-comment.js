@@ -1,15 +1,15 @@
-/* Kleegr — Voice note for GHL Internal Comments v26
- * No URL in message text. Audio stored in Supabase by short ID.
- * Player finds the ID in text, resolves via /api/audio/[id], plays. */
+/* Kleegr — Voice note for GHL Internal Comments v27
+ * ID on second line (preview only shows first line).
+ * Player matches vn:HEXID pattern in text nodes. */
 (function kleegrVoiceComment() {
   "use strict";
-  var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var AUDIO_BASE = "https://kleegr-voice-comments.vercel.app/api/audio/";
-  var DECRYPT_ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/decrypt-session";
-  var APP_ID = "69d29cd45ed1d5be94e6e582";
-  var VERSION = 26;
-  if (window.__kleegrVoiceCommentInstalled === VERSION) return;
-  window.__kleegrVoiceCommentInstalled = VERSION;
+  var ENDPOINT="https://kleegr-voice-comments.vercel.app/api/internal-comment";
+  var AUDIO_BASE="https://kleegr-voice-comments.vercel.app/api/audio/";
+  var DECRYPT_ENDPOINT="https://kleegr-voice-comments.vercel.app/api/decrypt-session";
+  var APP_ID="69d29cd45ed1d5be94e6e582";
+  var VERSION=27;
+  if(window.__kleegrVoiceCommentInstalled===VERSION)return;
+  window.__kleegrVoiceCommentInstalled=VERSION;
   var recording=false,pendingSend=false,pendingNote="",mediaRecorder=null,chunks=[],timerInt=null,startedAt=0,lastStream=null;
   function getLocationId(){var p=location.pathname||"";var m=p.match(/\/v2\/location\/([a-zA-Z0-9]+)/);if(m)return m[1];m=location.href.match(/[?&]locationId=([a-zA-Z0-9]+)/);return m?m[1]:"";}
   function getConversationId(){var seg=(location.pathname||"").split("/v2/location/")[1];if(seg){var parts=seg.split("/");if(parts[1]==="conversations"&&parts[2]==="conversations"&&parts[3])return parts[3];}var m=location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/);return m?m[1]:"";}
@@ -37,46 +37,36 @@
   function clearComposer(){var el=activeInternalInput();if(!el)return;try{if(el.tagName==="TEXTAREA"||el.tagName==="INPUT"){var p=el.tagName==="TEXTAREA"?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;var s=Object.getOwnPropertyDescriptor(p,"value");s.set.call(el,"");el.dispatchEvent(new Event("input",{bubbles:true}))}else{el.textContent="";el.dispatchEvent(new Event("input",{bubbles:true}))}}catch(e){}}
   function footerFrom(el){var card=el;for(var j=0;j<9&&card;j++){var send=card.querySelector("#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']");if(send){var bar=send.parentElement;for(var k=0;k<5&&bar;k++){if(bar.children&&bar.children.length>=2)return bar;bar=bar.parentElement;}return send.parentElement;}card=card.parentElement;}return null;}
   function placeWrap(){if(recording)return;var w=wrap();var input=activeInternalInput();if(!input){if(w)w.remove();return;}var footer=footerFrom(input);if(!footer){if(w)w.remove();return;}if(!w){w=document.createElement("span");w.id="kleegr-voice-wrap";w.style.cssText="display:inline-flex;align-items:center;vertical-align:middle";renderIdle(w);}var send=footer.querySelector("#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']");var lg=footer.firstElementChild;var tgt,bef;if(lg&&send&&!lg.contains(send)){tgt=lg;bef=lg.firstChild}else{tgt=footer;bef=footer.firstChild}if(w.parentNode!==tgt){try{tgt.insertBefore(w,bef)}catch(e){footer.insertBefore(w,footer.firstChild)}}}
-
-  // --- PLAYER: find voice notes by scanning for the short ID in text AND old-style audio links ---
   var AUDIO_RE=/(\.webm|\.ogg|\.oga|\.mp3|\.m4a|\.wav)(\?|$)/i;
   function isAudioHref(href){if(!href)return false;if(AUDIO_RE.test(href))return true;if(/filesafe\.space\/[^\s]*\/media\//i.test(href))return true;if(/kleegr-voice-comments\.vercel\.app\/v\//i.test(href))return true;return false;}
   function chipExistsForDoc(href){var auds=document.querySelectorAll("audio.klg-audio");for(var i=0;i<auds.length;i++){if(auds[i].getAttribute("src")===href)return true;}return false;}
   function inInboxList(el){var node=el;for(var i=0;i<12&&node;i++){if(node.querySelectorAll){var rows=node.querySelectorAll('a[href*="/conversations/conversations/"]');if(rows.length>=3)return true;}node=node.parentElement;}return false;}
-
   function hideVoiceMessage(chip){var node=chip;for(var i=0;i<20&&node&&node!==document.body;i++){try{var cs=window.getComputedStyle(node);var bg=cs.backgroundColor||"";if(bg&&bg!=="rgba(0, 0, 0, 0)"&&bg!=="transparent"&&bg!=="rgb(255, 255, 255)"&&bg.indexOf("255, 255, 255")===-1){var row=node.parentElement;if(row){row.style.display="none";return}node.style.display="none";return}}catch(e){}node=node.parentElement;}if(chip.parentElement)chip.parentElement.style.display="none";}
-
   function makeChip(href){var chip=document.createElement("span");chip.className="klg-audio-chip";chip.style.cssText="display:inline-flex;align-items:center;gap:8px;vertical-align:middle;margin-left:4px";var audio=document.createElement("audio");audio.className="klg-audio";audio.src=href;audio.preload="metadata";var play=document.createElement("button");play.type="button";play.style.cssText="border:none;background:rgba(180,83,9,.15);border-radius:50%;width:26px;height:26px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;color:"+AMBER;play.innerHTML=playSvg();var barWrap=document.createElement("span");barWrap.style.cssText="position:relative;width:96px;height:4px;background:rgba(180,83,9,.25);border-radius:2px;cursor:pointer;flex:0 0 auto";var barFill=document.createElement("span");barFill.style.cssText="position:absolute;left:0;top:0;height:100%;width:0%;background:"+AMBER+";border-radius:2px";barWrap.appendChild(barFill);var time=document.createElement("span");time.style.cssText="font:600 11px system-ui;color:"+AMBER+";white-space:nowrap";time.textContent="0:00";var speed=document.createElement("button");speed.type="button";speed.style.cssText="border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:"+AMBER+";padding:2px 5px";var rates=[1,1.5,2,0.75],ri=0;speed.textContent="1x";var del=document.createElement("button");del.type="button";del.title="Delete";del.style.cssText="border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:2px;color:"+AMBER+";opacity:.5";del.innerHTML=trashSvg();del.addEventListener("mouseenter",function(){del.style.opacity="1";del.style.color="#dc2626"});del.addEventListener("mouseleave",function(){del.style.opacity=".5";del.style.color=AMBER});del.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(!confirm("Delete this voice note?"))return;hideVoiceMessage(chip)});play.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(audio.paused)audio.play();else audio.pause()});audio.addEventListener("play",function(){play.innerHTML=pauseSvg()});audio.addEventListener("pause",function(){play.innerHTML=playSvg()});audio.addEventListener("ended",function(){play.innerHTML=playSvg()});audio.addEventListener("loadedmetadata",function(){time.textContent="0:00"+(isFinite(audio.duration)?" / "+fmt(audio.duration):"")});audio.addEventListener("timeupdate",function(){if(audio.duration&&isFinite(audio.duration)){barFill.style.width=(audio.currentTime/audio.duration*100)+"%";time.textContent=fmt(audio.currentTime)+" / "+fmt(audio.duration)}else{time.textContent=fmt(audio.currentTime)}});barWrap.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();var r=barWrap.getBoundingClientRect();var p=(e.clientX-r.left)/r.width;if(audio.duration&&isFinite(audio.duration))audio.currentTime=Math.max(0,Math.min(1,p))*audio.duration});speed.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();ri=(ri+1)%rates.length;audio.playbackRate=rates[ri];speed.textContent=rates[ri]+"x"});chip.appendChild(play);chip.appendChild(barWrap);chip.appendChild(time);chip.appendChild(speed);chip.appendChild(del);chip.appendChild(audio);return chip;}
-
-  // Upgrade: old-style audio links + new-style short IDs in text
   function upgradeAudioComments(){
-    // 1) old-style: find <a> tags with audio URLs
+    // old-style: <a> tags with audio URLs
     var links=document.getElementsByTagName("a");
     for(var i=0;i<links.length;i++){var a=links[i];var href=a.getAttribute&&a.getAttribute("href")||"";if(!isAudioHref(href))continue;a.style.display="none";if(chipExistsForDoc(href))continue;if(inInboxList(a))continue;if(a.parentNode)a.parentNode.insertBefore(makeChip(href),a.nextSibling);}
-    // 2) new-style: find text containing "Voice note \u00B7 <8-hex-char-id>"
-    var VN_RE = /Voice note \u00B7 ([a-f0-9]{8})/;
-    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-    var hits = [], node;
-    while ((node = walker.nextNode())) {
-      var v = node.nodeValue || "";
-      if (VN_RE.test(v)) hits.push(node);
-    }
-    for (var h = 0; h < hits.length; h++) {
-      var tn = hits[h]; var parent = tn.parentElement;
-      if (!parent || parent.__klgVnDone) continue;
-      if (inInboxList(parent)) continue;
-      var m = (tn.nodeValue || "").match(VN_RE);
-      if (!m) continue;
-      var vnId = m[1];
-      var audioSrc = AUDIO_BASE + vnId + ".webm";
-      if (chipExistsForDoc(audioSrc)) continue;
-      parent.__klgVnDone = true;
-      // hide the " \u00B7 abc123" part from the text
-      tn.nodeValue = (tn.nodeValue || "").replace(" \u00B7 " + vnId, "");
+    // new-style: text containing "vn:" followed by 8 hex chars
+    var VN_RE=/vn:([a-f0-9]{8})/;
+    var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null);
+    var hits=[],node;
+    while((node=walker.nextNode())){var v=node.nodeValue||"";if(VN_RE.test(v))hits.push(node);}
+    for(var h=0;h<hits.length;h++){
+      var tn=hits[h];var parent=tn.parentElement;
+      if(!parent||parent.__klgVnDone)continue;
+      if(inInboxList(parent))continue;
+      var m=(tn.nodeValue||"").match(VN_RE);
+      if(!m)continue;
+      var vnId=m[1];
+      var audioSrc=AUDIO_BASE+vnId+".webm";
+      if(chipExistsForDoc(audioSrc))continue;
+      parent.__klgVnDone=true;
+      // hide the "vn:abc12345" text
+      tn.nodeValue=(tn.nodeValue||"").replace("vn:"+vnId,"").trim();
       parent.appendChild(makeChip(audioSrc));
     }
   }
-
   function startRecording(){if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){renderStatus("Mic not supported","#dc2626",3000);return;}navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){lastStream=stream;chunks=[];var mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":(MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":"");mediaRecorder=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);mediaRecorder.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};mediaRecorder.onstop=function(){if(lastStream)lastStream.getTracks().forEach(function(t){t.stop()});if(pendingSend){send(new Blob(chunks,{type:mediaRecorder.mimeType||"audio/webm"}))}else{renderIdle()}};mediaRecorder.start();recording=true;pendingSend=false;startedAt=Date.now();renderRecording();timerInt=setInterval(function(){var s=Math.floor((Date.now()-startedAt)/1000);var tm=document.getElementById("kleegr-voice-timer");if(tm)tm.textContent=Math.floor(s/60)+":"+String(s%60).padStart(2,"0")},500)}).catch(function(){renderStatus("Mic permission denied","#dc2626",3000)});}
   function stopTimer(){if(timerInt){clearInterval(timerInt);timerInt=null}}
   function confirmRecording(){if(!recording)return;pendingNote=readComposerNote();recording=false;pendingSend=true;stopTimer();renderStatus("Sending\u2026","#2563eb");try{mediaRecorder&&mediaRecorder.stop()}catch(e){}}
