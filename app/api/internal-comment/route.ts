@@ -1,8 +1,8 @@
 /**
  * POST /api/internal-comment
  *
- * URL on its own line so inbox preview shows just the label.
- * Uses userId from exposeSessionDetails for proper avatar.
+ * Uses a short redirect URL in the message text so the inbox preview doesn't
+ * show the full CDN URL. The short URL redirects to the real audio file.
  */
 
 import { NextResponse } from "next/server";
@@ -18,6 +18,8 @@ const cors = {
     "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept",
 };
 
+const BASE_URL = "https://kleegr-voice-comments.vercel.app";
+
 export async function OPTIONS() {
     return new NextResponse(null, { status: 204, headers: cors });
 }
@@ -26,6 +28,11 @@ function isAuthError(e: any): boolean {
     const s = e?.response?.status;
     const body = JSON.stringify(e?.response?.data || "");
     return s === 401 || s === 403 || /not accessible|unauthor/i.test(body);
+}
+
+function makeShortUrl(fullUrl: string): string {
+    const encoded = Buffer.from(fullUrl).toString("base64url");
+    return `${BASE_URL}/v/${encoded}.webm`;
 }
 
 export async function POST(req: Request) {
@@ -62,15 +69,14 @@ export async function POST(req: Request) {
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // Label on first line, URL on second line. Preview should show just the label.
-            let message = note
-                ? `${note}\n${voiceLabel}\n${mediaUrl}`
-                : `${voiceLabel}\n${mediaUrl}`;
+            const shortUrl = makeShortUrl(mediaUrl);
+            const message = note
+                ? `${note}\n${voiceLabel} ${shortUrl}`
+                : `${voiceLabel} ${shortUrl}`;
             try {
                 return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] });
             } catch (e: any) {
                 if (userId && !isAuthError(e)) {
-                    console.log("[internal-comment] userId failed, retrying without");
                     return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] });
                 }
                 throw e;

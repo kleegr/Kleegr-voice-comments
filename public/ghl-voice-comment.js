@@ -1,8 +1,8 @@
 /* =========================================================================
- * Kleegr — Voice note for GHL Internal Comments   v23
+ * Kleegr — Voice note for GHL Internal Comments   v24
  * -------------------------------------------------------------------------
- * v23: clean delete confirm (no GHL mention). Uses exposeSessionDetails
- * for proper user initials. Delete button on each player.
+ * v24: fix delete (aggressive bubble walk-up), short redirect URLs in text
+ * (cleaner inbox preview), match both CDN and short redirect URLs for player.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
@@ -10,7 +10,7 @@
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var DECRYPT_ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID = "69d29cd45ed1d5be94e6e582";
-  var VERSION = 23;
+  var VERSION = 24;
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
@@ -63,6 +63,7 @@
     var s = document.createElement("style"); s.id = "kleegr-voice-style";
     s.textContent =
       'a[href$=".webm"],a[href$=".ogg"],a[href$=".oga"],a[href$=".mp3"],a[href$=".m4a"],a[href$=".wav"]{display:none!important}' +
+      'a[href*="kleegr-voice-comments.vercel.app/v/"]{display:none!important}' +
       ".klg-wave{display:inline-flex;align-items:center;gap:2px;height:16px}" +
       ".klg-wave i{display:inline-block;width:2px;height:5px;background:" + AMBER + ";border-radius:1px;animation:klgwave .9s ease-in-out infinite}" +
       ".klg-wave i:nth-child(2){animation-delay:.12s}.klg-wave i:nth-child(3){animation-delay:.24s}" +
@@ -162,7 +163,13 @@
   }
 
   var AUDIO_RE = /(\.webm|\.ogg|\.oga|\.mp3|\.m4a|\.wav)(\?|$)/i;
-  function isAudioHref(href) { if (!href) return false; return AUDIO_RE.test(href) || /filesafe\.space\/[^\s]*\/media\//i.test(href); }
+  function isAudioHref(href) {
+    if (!href) return false;
+    if (AUDIO_RE.test(href)) return true;
+    if (/filesafe\.space\/[^\s]*\/media\//i.test(href)) return true;
+    if (/kleegr-voice-comments\.vercel\.app\/v\//i.test(href)) return true;
+    return false;
+  }
   function chipExistsForDoc(href) {
     var auds = document.querySelectorAll("audio.klg-audio");
     for (var i = 0; i < auds.length; i++) { if (auds[i].getAttribute("src") === href) return true; }
@@ -177,20 +184,26 @@
     return false;
   }
 
-  function findMessageBubble(el) {
+  // Walk up from the chip to find the message wrapper to hide on delete.
+  // Strategy: find the nearest ancestor whose next/prev sibling is another
+  // message (has a different timestamp), or that contains exactly one timestamp.
+  function findMessageWrapper(el) {
     var node = el;
-    for (var i = 0; i < 15 && node; i++) {
-      if (node.getAttribute && (node.getAttribute('class') || '').match(/message|msg-/i)) return node;
-      if (node.getBoundingClientRect && node.getBoundingClientRect().width > 100) {
-        var cs = window.getComputedStyle(node);
-        if (cs.backgroundColor && cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.backgroundColor !== 'transparent') {
-          var txt = (node.textContent || '');
-          if (/\d{1,2}:\d{2}\s*(AM|PM)/i.test(txt) && /Voice note/i.test(txt)) return node;
-        }
+    var best = null;
+    for (var i = 0; i < 20 && node && node !== document.body; i++) {
+      var r = node.getBoundingClientRect();
+      // skip tiny containers
+      if (r.width < 100 || r.height < 30) { node = node.parentElement; continue; }
+      // if this container has a timestamp like "04:10 PM" it's likely the message row
+      var txt = node.textContent || "";
+      if (/\d{1,2}:\d{2}\s*(AM|PM)/i.test(txt) && /Voice note/i.test(txt)) {
+        best = node;
       }
+      // stop if we've hit something very tall (the whole conversation feed)
+      if (r.height > 500) break;
       node = node.parentElement;
     }
-    return null;
+    return best;
   }
 
   function makeChip(href) {
@@ -212,9 +225,9 @@
     del.addEventListener("click", function (e) {
       e.preventDefault(); e.stopPropagation();
       if (!confirm("Delete this voice note?")) return;
-      var bubble = findMessageBubble(chip);
-      if (bubble) { bubble.style.display = "none"; }
-      else { chip.style.display = "none"; }
+      var wrapper = findMessageWrapper(chip);
+      if (wrapper) { wrapper.style.display = "none"; }
+      else { chip.parentElement ? chip.parentElement.style.display = "none" : chip.style.display = "none"; }
     });
     play.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); if (audio.paused) audio.play(); else audio.pause(); });
     audio.addEventListener("play", function () { play.innerHTML = pauseSvg(); });
