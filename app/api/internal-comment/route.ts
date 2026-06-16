@@ -5,8 +5,8 @@
  * Supabase Token table (REST API). Uploads the audio, posts an InternalComment
  * with the media URL in the text (custom JS renders the player). On auth
  * failure, refreshes the location token once and retries. If a provided userId
- * is invalid, retries without it. Embeds sender's name in the message text so
- * it's always visible regardless of GHL's avatar attribution.
+ * is invalid, retries without it. Embeds sender's name in the message text.
+ * URL on its own line so it doesn't leak into the inbox preview.
  */
 
 import { NextResponse } from "next/server";
@@ -68,21 +68,20 @@ export async function POST(req: Request) {
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // Build the message with the sender's name so it's always visible
+            // URL on its own line so inbox preview only shows the clean label
             let message = "";
             if (userName && note) {
-                message = `${userName}: ${note}\n${voiceLabel} ${mediaUrl}`;
+                message = `${userName}: ${note}\n${voiceLabel}\n${mediaUrl}`;
             } else if (userName) {
-                message = `${userName}: ${voiceLabel} ${mediaUrl}`;
+                message = `${userName}: ${voiceLabel}\n${mediaUrl}`;
             } else if (note) {
-                message = `${note}\n${voiceLabel} ${mediaUrl}`;
+                message = `${note}\n${voiceLabel}\n${mediaUrl}`;
             } else {
-                message = `${voiceLabel} ${mediaUrl}`;
+                message = `${voiceLabel}\n${mediaUrl}`;
             }
             try {
                 return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] });
             } catch (e: any) {
-                // If the userId we passed is invalid, post without it rather than fail.
                 if (userId && !isAuthError(e)) {
                     return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] });
                 }
