@@ -1,10 +1,10 @@
-/* Kleegr — Voice note for GHL Internal Comments v24 */
+/* Kleegr — Voice note for GHL Internal Comments v25 */
 (function kleegrVoiceComment() {
   "use strict";
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var DECRYPT_ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID = "69d29cd45ed1d5be94e6e582";
-  var VERSION = 24;
+  var VERSION = 25;
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
   var recording = false, pendingSend = false, pendingNote = "", mediaRecorder = null, chunks = [], timerInt = null, startedAt = 0, lastStream = null;
@@ -29,7 +29,7 @@
   var AMBER="#b45309",AMBER_BG="#fff8e1",AMBER_BD="#f59e0b";
   function injectStyleOnce(){if(document.getElementById("kleegr-voice-style"))return;var s=document.createElement("style");s.id="kleegr-voice-style";s.textContent='a[href$=".webm"],a[href$=".ogg"],a[href$=".oga"],a[href$=".mp3"],a[href$=".m4a"],a[href$=".wav"]{display:none!important}a[href*="kleegr-voice-comments.vercel.app/v/"]{display:none!important}.klg-wave{display:inline-flex;align-items:center;gap:2px;height:16px}.klg-wave i{display:inline-block;width:2px;height:5px;background:'+AMBER+';border-radius:1px;animation:klgwave .9s ease-in-out infinite}.klg-wave i:nth-child(2){animation-delay:.12s}.klg-wave i:nth-child(3){animation-delay:.24s}.klg-wave i:nth-child(4){animation-delay:.36s}.klg-wave i:nth-child(5){animation-delay:.48s}@keyframes klgwave{0%,100%{height:5px}50%{height:15px}}';document.head.appendChild(s);}
   function wrap(){return document.getElementById("kleegr-voice-wrap");}
-  function renderIdle(target){var w=target||wrap();if(!w)return;w.innerHTML="";var btn=document.createElement("button");btn.type="button";btn.title="Record a voice note (internal comment)";btn.style.cssText="display:inline-flex;align-items:center;justify-content:center;height:34px;width:34px;border:none;border-radius:50%;background:transparent;cursor:pointer;";btn.innerHTML=micSvg(AMBER);btn.addEventListener("mouseenter",function(){btn.style.background="rgba(180,83,9,0.10)"});btn.addEventListener("mouseleave",function(){btn.style.background="transparent"});btn.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();startRecording()});w.appendChild(btn);}
+  function renderIdle(target){var w=target||wrap();if(!w)return;w.innerHTML="";var btn=document.createElement("button");btn.type="button";btn.title="Record a voice note";btn.style.cssText="display:inline-flex;align-items:center;justify-content:center;height:34px;width:34px;border:none;border-radius:50%;background:transparent;cursor:pointer;";btn.innerHTML=micSvg(AMBER);btn.addEventListener("mouseenter",function(){btn.style.background="rgba(180,83,9,0.10)"});btn.addEventListener("mouseleave",function(){btn.style.background="transparent"});btn.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();startRecording()});w.appendChild(btn);}
   function renderRecording(){var w=wrap();if(!w)return;w.innerHTML='<span style="display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 10px;border-radius:18px;background:'+AMBER_BG+';border:1px solid '+AMBER_BD+';color:'+AMBER+';font:600 12px system-ui,sans-serif"><span style="width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block"></span><span class="klg-wave"><i></i><i></i><i></i><i></i><i></i></span><span id="kleegr-voice-timer">0:00</span><span id="kleegr-voice-cancel" title="Cancel" style="cursor:pointer;display:inline-flex;padding:2px">'+xSvg(AMBER)+'</span><span id="kleegr-voice-send" title="Send" style="cursor:pointer;display:inline-flex;padding:2px">'+checkSvg("#15803d")+'</span></span>';var c=document.getElementById("kleegr-voice-cancel"),s=document.getElementById("kleegr-voice-send");if(c)c.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();cancelRecording()});if(s)s.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();confirmRecording()});}
   function renderStatus(text,color,ms){var w=wrap();if(!w)return;w.innerHTML='<span style="display:inline-flex;align-items:center;height:34px;padding:0 12px;border-radius:18px;background:'+AMBER_BG+';border:1px solid '+AMBER_BD+';color:'+(color||AMBER)+';font:600 12px system-ui,sans-serif;max-width:340px">'+text+'</span>';if(ms)setTimeout(function(){if(!recording&&wrap())renderIdle()},ms);}
   function isVisible(el){if(!el)return false;if(el.offsetParent!==null)return true;var r=el.getClientRects();return!!(r&&r.length);}
@@ -42,26 +42,28 @@
   function isAudioHref(href){if(!href)return false;if(AUDIO_RE.test(href))return true;if(/filesafe\.space\/[^\s]*\/media\//i.test(href))return true;if(/kleegr-voice-comments\.vercel\.app\/v\//i.test(href))return true;return false;}
   function chipExistsForDoc(href){var auds=document.querySelectorAll("audio.klg-audio");for(var i=0;i<auds.length;i++){if(auds[i].getAttribute("src")===href)return true;}return false;}
   function inInboxList(el){var node=el;for(var i=0;i<12&&node;i++){if(node.querySelectorAll){var rows=node.querySelectorAll('a[href*="/conversations/conversations/"]');if(rows.length>=3)return true;}node=node.parentElement;}return false;}
-  // Delete: walk up from chip, find the message row (contains timestamp + Voice note text), hide it
+
+  // Delete: find the yellow bubble by background color, then hide its parent row
   function hideVoiceMessage(chip) {
-    var node = chip, best = null;
+    var node = chip;
     for (var i = 0; i < 20 && node && node !== document.body; i++) {
-      var r = node.getBoundingClientRect();
-      if (r.width > 100 && r.height > 30 && r.height < 500) {
-        var txt = node.textContent || "";
-        if (/\d{1,2}:\d{2}\s*(AM|PM)/i.test(txt)) best = node;
-      }
+      try {
+        var cs = window.getComputedStyle(node);
+        var bg = cs.backgroundColor || "";
+        // Look for any non-white, non-transparent background (the yellow internal comment bubble)
+        if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent" && bg !== "rgb(255, 255, 255)" && bg.indexOf("255, 255, 255") === -1) {
+          // Found the colored bubble. Hide its parent (the full message row with avatar + timestamp)
+          var row = node.parentElement;
+          if (row) { row.style.display = "none"; return; }
+          node.style.display = "none"; return;
+        }
+      } catch(e) {}
       node = node.parentElement;
     }
-    if (best) { best.style.display = "none"; return true; }
-    // fallback: hide the chip's nearest block parent
-    node = chip;
-    for (var j = 0; j < 10 && node; j++) {
-      if (node.style) { node.style.display = "none"; return true; }
-      node = node.parentElement;
-    }
-    return false;
+    // fallback: hide chip's parent chain
+    if (chip.parentElement) chip.parentElement.style.display = "none";
   }
+
   function makeChip(href) {
     var chip = document.createElement("span"); chip.className = "klg-audio-chip";
     chip.style.cssText = "display:inline-flex;align-items:center;gap:8px;vertical-align:middle;margin-left:8px";
@@ -72,7 +74,7 @@
     var time = document.createElement("span"); time.style.cssText="font:600 11px system-ui;color:"+AMBER+";white-space:nowrap"; time.textContent="0:00";
     var speed = document.createElement("button"); speed.type="button"; speed.style.cssText="border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:"+AMBER+";padding:2px 5px"; var rates=[1,1.5,2,0.75],ri=0; speed.textContent="1x";
     var open = document.createElement("a"); open.href=href; open.target="_blank"; open.rel="noopener"; open.textContent="\u2197"; open.title="Open in new tab"; open.style.cssText="color:"+AMBER+";text-decoration:none;font:700 12px system-ui;opacity:.7";
-    var del = document.createElement("button"); del.type="button"; del.title="Delete this voice note";
+    var del = document.createElement("button"); del.type="button"; del.title="Delete";
     del.style.cssText="border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:2px;color:"+AMBER+";opacity:.5";
     del.innerHTML=trashSvg();
     del.addEventListener("mouseenter",function(){del.style.opacity="1";del.style.color="#dc2626"});

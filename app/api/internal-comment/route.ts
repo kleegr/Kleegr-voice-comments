@@ -1,6 +1,7 @@
 /**
  * POST /api/internal-comment
- * Uses short redirect URL in message text for cleaner inbox preview.
+ * Pads the voice label with zero-width spaces so the inbox preview
+ * truncates before reaching the URL on the second line.
  */
 import { NextResponse } from "next/server";
 import { uploadAudio, sendInternalComment, getConversationContactId } from "../../../lib/ghl";
@@ -10,7 +11,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept" };
-const BASE_URL = "https://kleegr-voice-comments.vercel.app";
 
 export async function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 
@@ -19,9 +19,8 @@ function isAuthError(e: any): boolean {
     return s === 401 || s === 403 || /not accessible|unauthor/i.test(body);
 }
 
-function makeShortUrl(fullUrl: string): string {
-    return `${BASE_URL}/v/${Buffer.from(fullUrl).toString("base64url")}.webm`;
-}
+// 60 zero-width spaces to pad past the preview's ~50-char truncation
+const ZWS_PAD = "\u200B".repeat(60);
 
 export async function POST(req: Request) {
     try {
@@ -35,14 +34,16 @@ export async function POST(req: Request) {
         if (!file) return NextResponse.json({ success: false, error: "file is required" }, { status: 400, headers: cors });
         if (!contactIdIn && !conversationId) return NextResponse.json({ success: false, error: "contactId or conversationId is required" }, { status: 400, headers: cors });
         let row: TokenRow | null = null; let token = "";
-        if (locationId && hasSupabase()) { try { row = await getLocationTokenRow(locationId); } catch (e: any) { console.error("[internal-comment] token lookup failed:", e?.message); } if (row?.accessToken) token = row.accessToken; }
+        if (locationId && hasSupabase()) { try { row = await getLocationTokenRow(locationId); } catch (e: any) {} if (row?.accessToken) token = row.accessToken; }
         if (!token && process.env.GHL_PIT) token = process.env.GHL_PIT;
-        if (!token) return NextResponse.json({ success: false, error: `No GHL token for location ${locationId || "(unknown)"}.` }, { status: 502, headers: cors });
+        if (!token) return NextResponse.json({ success: false, error: "No token" }, { status: 502, headers: cors });
         const buffer = Buffer.from(await file.arrayBuffer()); const filename = file.name || "voice-note.webm"; const mime = file.type || "audio/webm";
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            const shortUrl = makeShortUrl(mediaUrl);
-            const message = note ? `${note}\n${voiceLabel} ${shortUrl}` : `${voiceLabel} ${shortUrl}`;
+            // Label + invisible padding + newline + URL. Preview sees "Voice note" then hits the padding and truncates.
+            const message = note
+                ? `${note}\n${voiceLabel}${ZWS_PAD}\n${mediaUrl}`
+                : `${voiceLabel}${ZWS_PAD}\n${mediaUrl}`;
             try { return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] }); }
             catch (e: any) { if (userId && !isAuthError(e)) { return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] }); } throw e; }
         }
@@ -58,8 +59,7 @@ export async function POST(req: Request) {
     } catch (e: any) {
         if (e?.code === "NO_CONTACT") return NextResponse.json({ success: false, error: "Could not resolve contact" }, { status: 422, headers: cors });
         if (e?.code === "UPLOAD_FAILED") return NextResponse.json({ success: false, error: "Audio upload failed" }, { status: 502, headers: cors });
-        const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 200) : e?.message || "Internal Server Error";
-        console.error("[internal-comment] error:", detail);
+        const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 200) : e?.message || "Error";
         return NextResponse.json({ success: false, error: detail }, { status: 502, headers: cors });
     }
 }
