@@ -1,16 +1,18 @@
 /* =========================================================================
- * Kleegr — Voice note for GHL Internal Comments   v20
+ * Kleegr — Voice note for GHL Internal Comments   v21
  * -------------------------------------------------------------------------
- * Auto-resolves the logged-in GHL user (via email from localStorage or page)
- * and passes their real userId when posting, so the comment shows their
- * initials/name instead of generic "US". No prompts. Falls back gracefully.
+ * Uses GHL's official window.exposeSessionDetails(APP_ID) to get the real
+ * logged-in userId. Sends encrypted session to our server for decryption.
+ * The userId is then passed when posting internal comments so GHL shows
+ * the correct user initials/avatar. No prompts, fully automatic.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var RESOLVE_ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/resolve-user";
-  var VERSION = 20;
+  var DECRYPT_ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/decrypt-session";
+  var APP_ID = "69d29cd45ed1d5be94e6e582";
+  var VERSION = 21;
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
@@ -21,100 +23,40 @@
   function getConversationId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "conversations" && parts[2] === "conversations" && parts[3]) return parts[3]; } var m = location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/); return m ? m[1] : ""; }
   function getContactId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "contacts" && parts[2] === "detail" && parts[3]) return parts[3]; } var a = document.querySelector('a[href*="/contacts/detail/"]'); if (a) { var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/); if (mm) return mm[1]; } return ""; }
 
-  // ---- auto-detect current user's email from the page ---------------------
-  function decodeJwtPayload(jwt) {
-    try {
-      var b = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-      var json = decodeURIComponent(atob(b).split("").map(function (c) { return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2); }).join(""));
-      return JSON.parse(json);
-    } catch (e) { return null; }
-  }
-  function looksLikeJwt(v) { return typeof v === "string" && v.length > 40 && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(v); }
-  function looksLikeEmail(v) { return typeof v === "string" && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v); }
-
-  function detectUserEmail() {
-    // 1) globals
-    try { if (window.__USER__ && looksLikeEmail(window.__USER__.email)) return window.__USER__.email; } catch (e) {}
-    // 2) scan localStorage for JSON with email fields or JWTs with email
-    try {
-      for (var i = 0; i < localStorage.length; i++) {
-        var key = localStorage.key(i);
-        var val = localStorage.getItem(key);
-        if (!val) continue;
-        // try JSON parse
-        try {
-          var obj = JSON.parse(val);
-          if (obj) {
-            // direct email field
-            var em = obj.email || (obj.user && obj.user.email) || (obj.value && obj.value.email) || (obj.data && obj.data.email);
-            if (looksLikeEmail(em)) return em;
-          }
-        } catch (e) {}
-        // try JWT
-        if (looksLikeJwt(val)) {
-          var p = decodeJwtPayload(val);
-          if (p && looksLikeEmail(p.email)) return p.email;
-        }
-        // try JWT inside JSON
-        try {
-          var obj2 = JSON.parse(val);
-          if (obj2) {
-            var cands = [obj2.token, obj2.access_token, obj2.accessToken, obj2.jwt, obj2.value && (obj2.value.token || obj2.value.access_token)];
-            for (var c = 0; c < cands.length; c++) {
-              if (looksLikeJwt(cands[c])) {
-                var pp = decodeJwtPayload(cands[c]);
-                if (pp && looksLikeEmail(pp.email)) return pp.email;
-              }
-            }
-          }
-        } catch (e) {}
-      }
-    } catch (e) {}
-    // 3) scan sessionStorage
-    try {
-      for (var j = 0; j < sessionStorage.length; j++) {
-        var sk = sessionStorage.key(j);
-        var sv = sessionStorage.getItem(sk);
-        if (!sv) continue;
-        try {
-          var so = JSON.parse(sv);
-          if (so) {
-            var se = so.email || (so.user && so.user.email);
-            if (looksLikeEmail(se)) return se;
-          }
-        } catch (e) {}
-      }
-    } catch (e) {}
-    return "";
-  }
-
-  // ---- resolve GHL userId from email via server ---------------------------
+  // ---- resolve logged-in user via GHL's exposeSessionDetails --------------
   var USERID_KEY = "kleegr_voice_ghl_user_id";
   var _resolving = false;
   function getCachedUserId() { try { return localStorage.getItem(USERID_KEY) || ""; } catch (e) { return ""; } }
   function cacheUserId(uid) { try { localStorage.setItem(USERID_KEY, uid); } catch (e) {} }
 
-  function resolveUserId() {
+  function resolveUserSession() {
     if (getCachedUserId() || _resolving) return;
-    var email = detectUserEmail();
-    var locId = getLocationId();
-    if (!locId) return;
+    if (typeof window.exposeSessionDetails !== "function") {
+      console.log("[kleegr-voice] exposeSessionDetails not available yet, will retry");
+      return;
+    }
     _resolving = true;
-    var url = RESOLVE_ENDPOINT + "?locationId=" + encodeURIComponent(locId);
-    if (email) url += "&email=" + encodeURIComponent(email);
-    fetch(url).then(function (r) { return r.json(); }).then(function (data) {
-      _resolving = false;
-      if (data && data.matched && data.matched.id) {
-        cacheUserId(data.matched.id);
-        console.log("[kleegr-voice] resolved userId:", data.matched.id, data.matched.name);
-      } else if (data && data.users && data.users.length === 1) {
-        // only one user on this location — must be them
-        cacheUserId(data.users[0].id);
-        console.log("[kleegr-voice] single user, auto-matched:", data.users[0].id, data.users[0].name);
-      } else {
-        console.log("[kleegr-voice] could not auto-match user. email=", email, "users=", data && data.users);
-      }
-    }).catch(function (e) { _resolving = false; console.error("[kleegr-voice] resolve-user error:", e); });
+    try {
+      window.exposeSessionDetails(APP_ID).then(function (encrypted) {
+        if (!encrypted) { _resolving = false; console.log("[kleegr-voice] exposeSessionDetails returned empty"); return; }
+        fetch(DECRYPT_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ encryptedData: encrypted })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          _resolving = false;
+          if (data && data.userId) {
+            cacheUserId(data.userId);
+            console.log("[kleegr-voice] resolved userId via exposeSessionDetails:", data.userId, data.userName);
+          } else {
+            console.log("[kleegr-voice] decrypt-session returned no userId:", data);
+          }
+        })
+        .catch(function (e) { _resolving = false; console.error("[kleegr-voice] decrypt-session error:", e); });
+      }).catch(function (e) { _resolving = false; console.error("[kleegr-voice] exposeSessionDetails error:", e); });
+    } catch (e) { _resolving = false; console.error("[kleegr-voice] exposeSessionDetails threw:", e); }
   }
 
   function micSvg(c) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="' + c + '"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>'; }
@@ -333,7 +275,15 @@
 
   // ---- boot ----------------------------------------------------------------
   injectStyleOnce();
-  resolveUserId();  // auto-detect + resolve in background on page load
+  // resolve user session on load + retry every 3s until resolved (exposeSessionDetails may not be ready immediately)
+  resolveUserSession();
+  var retryCount = 0;
+  var retryInt = setInterval(function () {
+    if (getCachedUserId() || retryCount > 10) { clearInterval(retryInt); return; }
+    retryCount++;
+    resolveUserSession();
+  }, 3000);
+
   var ticking = false;
   function tick() {
     if (ticking) return;
