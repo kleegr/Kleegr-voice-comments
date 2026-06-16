@@ -1,11 +1,9 @@
 /**
  * POST /api/internal-comment
  *
- * Multi-subaccount: resolves a per-location GHL token from the Kleegre Apps
- * Supabase Token table (REST API). Uploads the audio, posts an InternalComment.
- * The media URL is ONLY in the attachments array (not in message text) so it
- * doesn't leak into inbox previews. Custom JS finds and renders the player from
- * GHL's attachment link. Embeds sender's name in the message text.
+ * URL must be in the message text (GHL doesn't render attachment links for
+ * internal comments, so the player script needs the URL in text to find it).
+ * Name goes first so inbox preview shows "Name: \uD83C\uDFA4 Voice note htt..."
  */
 
 import { NextResponse } from "next/server";
@@ -66,16 +64,14 @@ export async function POST(req: Request) {
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // NO URL in message text — only in attachments. Inbox preview stays clean.
+            // Name first, then label, then URL on same line (player needs it in text).
+            // Inbox preview truncates, so it shows: "Name: \uD83C\uDFA4 Voice note htt..."
+            let prefix = userName ? `${userName}: ` : "";
             let message = "";
-            if (userName && note) {
-                message = `${userName}: ${note}\n${voiceLabel}`;
-            } else if (userName) {
-                message = `${userName}: ${voiceLabel}`;
-            } else if (note) {
-                message = `${note}\n${voiceLabel}`;
+            if (note) {
+                message = `${prefix}${note}\n${voiceLabel} ${mediaUrl}`;
             } else {
-                message = voiceLabel;
+                message = `${prefix}${voiceLabel} ${mediaUrl}`;
             }
             try {
                 return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] });
