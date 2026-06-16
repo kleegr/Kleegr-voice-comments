@@ -1,16 +1,15 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v17: embed sender's name in the message text (GHL attributes comments to
- * the app token, not a user, so the avatar always shows "US"). Reads the
- * name from the GHL page profile element or localStorage JWT. Message now
- * shows e.g. "Naftuli: \uD83C\uDFA4 Voice note [player]".
+ * v18: ask user's name on first use (saved to localStorage). URL removed
+ * from message text (only in attachments) so inbox preview is clean.
+ * Player now also finds GHL attachment links (not just text URLs).
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 17;
+  var VERSION = 18;
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
@@ -21,7 +20,43 @@
   function getConversationId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "conversations" && parts[2] === "conversations" && parts[3]) return parts[3]; } var m = location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/); return m ? m[1] : ""; }
   function getContactId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "contacts" && parts[2] === "detail" && parts[3]) return parts[3]; } var a = document.querySelector('a[href*="/contacts/detail/"]'); if (a) { var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/); if (mm) return mm[1]; } return ""; }
 
-  // ---- resolve logged-in GHL user info ------------------------------------
+  // ---- user identity -------------------------------------------------------
+  var NAME_KEY = "kleegr_voice_user_name";
+  function getSavedName() { try { return localStorage.getItem(NAME_KEY) || ""; } catch (e) { return ""; } }
+  function saveName(n) { try { localStorage.setItem(NAME_KEY, n); } catch (e) {} }
+
+  function getUserName() {
+    var saved = getSavedName();
+    if (saved) return saved;
+    // try auto-detect from page
+    try { if (window.__USER__ && (window.__USER__.name || window.__USER__.firstName)) { var n = window.__USER__.name || window.__USER__.firstName; saveName(n); return n; } } catch (e) {}
+    return "";
+  }
+
+  function promptForName(callback) {
+    var name = getUserName();
+    if (name) { callback(name); return; }
+    // show a small inline prompt
+    var w = wrap(); if (!w) { callback(""); return; }
+    w.innerHTML =
+      '<span style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 10px;border-radius:18px;background:#fff8e1;border:1px solid #f59e0b;font:600 12px system-ui,sans-serif;color:#b45309">' +
+      '<span>Your name for voice notes:</span>' +
+      '<input id="kleegr-name-input" type="text" placeholder="e.g. Naftuli" style="border:1px solid #f59e0b;border-radius:8px;padding:2px 8px;font:600 12px system-ui;width:120px;outline:none">' +
+      '<span id="kleegr-name-ok" style="cursor:pointer;font:700 14px system-ui;color:#15803d">&check;</span>' +
+      '</span>';
+    var inp = document.getElementById("kleegr-name-input");
+    var ok = document.getElementById("kleegr-name-ok");
+    function finish() {
+      var v = (inp && inp.value || "").trim();
+      if (!v) { if (inp) inp.focus(); return; }
+      saveName(v);
+      renderIdle();
+      callback(v);
+    }
+    if (ok) ok.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); finish(); });
+    if (inp) { inp.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); finish(); } }); inp.focus(); }
+  }
+
   function decodeJwtPayload(jwt) {
     try {
       var b = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
@@ -30,28 +65,13 @@
     } catch (e) { return null; }
   }
   function looksLikeJwt(v) { return typeof v === "string" && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(v); }
-
-  var _cachedUser = null;
-  function getGhlUser() {
-    if (_cachedUser) return _cachedUser;
-    var uid = "", uname = "";
-    // 1) globals
-    try { if (window.__USER__) { uid = window.__USER__.id || ""; uname = window.__USER__.name || window.__USER__.firstName || ""; } } catch (e) {}
-    // 2) profile element on the page (sidebar avatar / settings menu)
-    if (!uname) {
+  function getUserId() {
+    if (window.__klgUserId) return window.__klgUserId;
+    var uid = "";
+    try { if (window.__USER__ && window.__USER__.id) uid = window.__USER__.id; } catch (e) {}
+    if (!uid) {
       try {
-        // GHL often has the user's name in a profile/avatar dropdown
-        var candidates = document.querySelectorAll('[data-testid="user-name"],[class*="user-name"],[class*="userName"],[class*="profile-name"],.user-profile-name');
-        for (var c = 0; c < candidates.length && !uname; c++) {
-          var t = (candidates[c].textContent || "").trim();
-          if (t && t.length > 1 && t.length < 60) uname = t;
-        }
-      } catch (e) {}
-    }
-    // 3) scan localStorage for a GHL JWT
-    if (!uid || !uname) {
-      try {
-        for (var i = 0; i < localStorage.length; i++) {
+        for (var i = 0; i < localStorage.length && !uid; i++) {
           var val = localStorage.getItem(localStorage.key(i));
           if (!val) continue;
           var jwt = null;
@@ -59,16 +79,12 @@
           else { try { var o = JSON.parse(val); var cand = o && (o.token || o.access_token || o.accessToken || o.jwt || (o.value && (o.value.token || o.value.access_token))); if (looksLikeJwt(cand)) jwt = cand; } catch (e) {} }
           if (!jwt) continue;
           var p = decodeJwtPayload(jwt);
-          if (p) {
-            if (!uid) uid = p.user_id || p.userId || p.sub || (p.user && p.user.id) || "";
-            if (!uname) uname = p.name || p.firstName || (p.user && (p.user.name || p.user.firstName)) || "";
-            if (uid && uname) break;
-          }
+          if (p) { uid = p.user_id || p.userId || p.sub || (p.user && p.user.id) || ""; }
         }
       } catch (e) {}
     }
-    _cachedUser = { id: uid, name: uname };
-    return _cachedUser;
+    if (uid) window.__klgUserId = uid;
+    return uid;
   }
 
   function micSvg(c) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="' + c + '"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>'; }
@@ -104,8 +120,12 @@
     btn.innerHTML = micSvg(AMBER);
     btn.addEventListener("mouseenter", function () { btn.style.background = "rgba(180,83,9,0.10)"; });
     btn.addEventListener("mouseleave", function () { btn.style.background = "transparent"; });
-    btn.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); startRecording(); });
+    btn.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); handleMicClick(); });
     w.appendChild(btn);
+  }
+
+  function handleMicClick() {
+    promptForName(function () { startRecording(); });
   }
 
   function renderRecording() {
@@ -271,9 +291,8 @@
     if (conversationId) fd.append("conversationId", conversationId);
     if (locationId) fd.append("locationId", locationId);
     if (pendingNote) fd.append("note", pendingNote);
-    var user = getGhlUser();
-    if (user.id) fd.append("userId", user.id);
-    if (user.name) fd.append("userName", user.name);
+    var uid = getUserId(); if (uid) fd.append("userId", uid);
+    var uname = getUserName(); if (uname) fd.append("userName", uname);
     fetch(ENDPOINT, { method: "POST", body: fd })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {

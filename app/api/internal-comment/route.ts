@@ -2,11 +2,10 @@
  * POST /api/internal-comment
  *
  * Multi-subaccount: resolves a per-location GHL token from the Kleegre Apps
- * Supabase Token table (REST API). Uploads the audio, posts an InternalComment
- * with the media URL in the text (custom JS renders the player). On auth
- * failure, refreshes the location token once and retries. If a provided userId
- * is invalid, retries without it. Embeds sender's name in the message text.
- * URL on its own line so it doesn't leak into the inbox preview.
+ * Supabase Token table (REST API). Uploads the audio, posts an InternalComment.
+ * The media URL is ONLY in the attachments array (not in message text) so it
+ * doesn't leak into inbox previews. Custom JS finds and renders the player from
+ * GHL's attachment link. Embeds sender's name in the message text.
  */
 
 import { NextResponse } from "next/server";
@@ -47,7 +46,6 @@ export async function POST(req: Request) {
         if (!contactIdIn && !conversationId)
             return NextResponse.json({ success: false, error: "contactId or conversationId is required" }, { status: 400, headers: cors });
 
-        // Resolve a token: per-location from Supabase, else fallback PIT.
         let row: TokenRow | null = null;
         let token = "";
         if (locationId && hasSupabase()) {
@@ -68,16 +66,16 @@ export async function POST(req: Request) {
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // URL on its own line so inbox preview only shows the clean label
+            // NO URL in message text — only in attachments. Inbox preview stays clean.
             let message = "";
             if (userName && note) {
-                message = `${userName}: ${note}\n${voiceLabel}\n${mediaUrl}`;
+                message = `${userName}: ${note}\n${voiceLabel}`;
             } else if (userName) {
-                message = `${userName}: ${voiceLabel}\n${mediaUrl}`;
+                message = `${userName}: ${voiceLabel}`;
             } else if (note) {
-                message = `${note}\n${voiceLabel}\n${mediaUrl}`;
+                message = `${note}\n${voiceLabel}`;
             } else {
-                message = `${voiceLabel}\n${mediaUrl}`;
+                message = voiceLabel;
             }
             try {
                 return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] });
