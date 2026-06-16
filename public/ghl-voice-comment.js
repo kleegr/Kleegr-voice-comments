@@ -1,9 +1,8 @@
 /* =========================================================================
- * Kleegr — Voice note for GHL Internal Comments   v22
+ * Kleegr — Voice note for GHL Internal Comments   v23
  * -------------------------------------------------------------------------
- * v22: adds delete (✕) button on each player to hide the voice note.
- * GHL has no delete-message API, so this is a cosmetic hide (removes from
- * DOM). Also uses exposeSessionDetails for proper NH initials.
+ * v23: clean delete confirm (no GHL mention). Uses exposeSessionDetails
+ * for proper user initials. Delete button on each player.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
@@ -11,7 +10,7 @@
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var DECRYPT_ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID = "69d29cd45ed1d5be94e6e582";
-  var VERSION = 22;
+  var VERSION = 23;
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
@@ -22,7 +21,6 @@
   function getConversationId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "conversations" && parts[2] === "conversations" && parts[3]) return parts[3]; } var m = location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/); return m ? m[1] : ""; }
   function getContactId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "contacts" && parts[2] === "detail" && parts[3]) return parts[3]; } var a = document.querySelector('a[href*="/contacts/detail/"]'); if (a) { var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/); if (mm) return mm[1]; } return ""; }
 
-  // ---- resolve logged-in user via GHL's exposeSessionDetails --------------
   var USERID_KEY = "kleegr_voice_ghl_user_id";
   var _resolving = false;
   function getCachedUserId() { try { return localStorage.getItem(USERID_KEY) || ""; } catch (e) { return ""; } }
@@ -43,13 +41,10 @@
         .then(function (r) { return r.json(); })
         .then(function (data) {
           _resolving = false;
-          if (data && data.userId) {
-            cacheUserId(data.userId);
-            console.log("[kleegr-voice] resolved userId:", data.userId, data.userName);
-          }
+          if (data && data.userId) { cacheUserId(data.userId); }
         })
-        .catch(function (e) { _resolving = false; });
-      }).catch(function (e) { _resolving = false; });
+        .catch(function () { _resolving = false; });
+      }).catch(function () { _resolving = false; });
     } catch (e) { _resolving = false; }
   }
 
@@ -182,18 +177,13 @@
     return false;
   }
 
-  // find the GHL message bubble that contains an element
   function findMessageBubble(el) {
     var node = el;
     for (var i = 0; i < 15 && node; i++) {
-      // GHL message bubbles typically have a timestamp sibling and are within a message wrapper
       if (node.getAttribute && (node.getAttribute('class') || '').match(/message|msg-/i)) return node;
-      // fallback: look for a container that has the yellow background (internal comment)
-      var bg = node.style && node.style.background || '';
       if (node.getBoundingClientRect && node.getBoundingClientRect().width > 100) {
         var cs = window.getComputedStyle(node);
         if (cs.backgroundColor && cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.backgroundColor !== 'transparent') {
-          // check if this looks like a message container (has time text nearby)
           var txt = (node.textContent || '');
           if (/\d{1,2}:\d{2}\s*(AM|PM)/i.test(txt) && /Voice note/i.test(txt)) return node;
         }
@@ -214,16 +204,14 @@
     var time = document.createElement("span"); time.style.cssText = "font:600 11px system-ui;color:" + AMBER + ";white-space:nowrap"; time.textContent = "0:00";
     var speed = document.createElement("button"); speed.type = "button"; speed.style.cssText = "border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:" + AMBER + ";padding:2px 5px"; var rates = [1, 1.5, 2, 0.75], ri = 0; speed.textContent = "1x";
     var open = document.createElement("a"); open.href = href; open.target = "_blank"; open.rel = "noopener"; open.textContent = "\u2197"; open.title = "Open in new tab"; open.style.cssText = "color:" + AMBER + ";text-decoration:none;font:700 12px system-ui;opacity:.7";
-    // delete button
-    var del = document.createElement("button"); del.type = "button"; del.title = "Hide this voice note";
+    var del = document.createElement("button"); del.type = "button"; del.title = "Delete this voice note";
     del.style.cssText = "border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:2px;color:" + AMBER + ";opacity:.5";
     del.innerHTML = trashSvg();
     del.addEventListener("mouseenter", function () { del.style.opacity = "1"; del.style.color = "#dc2626"; });
     del.addEventListener("mouseleave", function () { del.style.opacity = ".5"; del.style.color = AMBER; });
     del.addEventListener("click", function (e) {
       e.preventDefault(); e.stopPropagation();
-      if (!confirm("Hide this voice note? (cosmetic only \u2014 GHL doesn\u2019t support deleting messages via API)")) return;
-      // hide the entire message bubble
+      if (!confirm("Delete this voice note?")) return;
       var bubble = findMessageBubble(chip);
       if (bubble) { bubble.style.display = "none"; }
       else { chip.style.display = "none"; }
@@ -300,7 +288,7 @@
         }
         else { var msg = (res.j && res.j.error) ? String(res.j.error).slice(0, 80) : "error"; renderStatus("Failed: " + msg, "#dc2626", 6000); }
       })
-      .catch(function (err) { renderStatus("Network error", "#dc2626", 5000); });
+      .catch(function () { renderStatus("Network error", "#dc2626", 5000); });
   }
 
   // ---- boot ----------------------------------------------------------------
