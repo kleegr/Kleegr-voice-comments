@@ -1,15 +1,15 @@
 /* =========================================================================
  * Kleegr — Voice note for GHL Internal Comments
  * -------------------------------------------------------------------------
- * v18: ask user's name on first use (saved to localStorage). URL removed
- * from message text (only in attachments) so inbox preview is clean.
- * Player now also finds GHL attachment links (not just text URLs).
+ * v19: use browser prompt() for name (bulletproof, can't fail silently).
+ * URL stays in message text (player needs it). Name goes first so inbox
+ * preview shows "Name: Voice note htt..." instead of leading with URL.
  * ========================================================================= */
 (function kleegrVoiceComment() {
   "use strict";
 
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
-  var VERSION = 18;
+  var VERSION = 19;
 
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
@@ -20,70 +20,22 @@
   function getConversationId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "conversations" && parts[2] === "conversations" && parts[3]) return parts[3]; } var m = location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/); return m ? m[1] : ""; }
   function getContactId() { var seg = (location.pathname || "").split("/v2/location/")[1]; if (seg) { var parts = seg.split("/"); if (parts[1] === "contacts" && parts[2] === "detail" && parts[3]) return parts[3]; } var a = document.querySelector('a[href*="/contacts/detail/"]'); if (a) { var mm = a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/); if (mm) return mm[1]; } return ""; }
 
-  // ---- user identity -------------------------------------------------------
+  // ---- user name (saved to localStorage, asked once via prompt) ------------
   var NAME_KEY = "kleegr_voice_user_name";
-  function getSavedName() { try { return localStorage.getItem(NAME_KEY) || ""; } catch (e) { return ""; } }
+  function getUserName() { try { return localStorage.getItem(NAME_KEY) || ""; } catch (e) { return ""; } }
   function saveName(n) { try { localStorage.setItem(NAME_KEY, n); } catch (e) {} }
-
-  function getUserName() {
-    var saved = getSavedName();
-    if (saved) return saved;
-    // try auto-detect from page
-    try { if (window.__USER__ && (window.__USER__.name || window.__USER__.firstName)) { var n = window.__USER__.name || window.__USER__.firstName; saveName(n); return n; } } catch (e) {}
-    return "";
+  function ensureName() {
+    var n = getUserName();
+    if (n) return n;
+    n = (window.prompt("Enter your name for voice notes (shown on each note):") || "").trim();
+    if (n) saveName(n);
+    return n;
   }
 
-  function promptForName(callback) {
-    var name = getUserName();
-    if (name) { callback(name); return; }
-    // show a small inline prompt
-    var w = wrap(); if (!w) { callback(""); return; }
-    w.innerHTML =
-      '<span style="display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 10px;border-radius:18px;background:#fff8e1;border:1px solid #f59e0b;font:600 12px system-ui,sans-serif;color:#b45309">' +
-      '<span>Your name for voice notes:</span>' +
-      '<input id="kleegr-name-input" type="text" placeholder="e.g. Naftuli" style="border:1px solid #f59e0b;border-radius:8px;padding:2px 8px;font:600 12px system-ui;width:120px;outline:none">' +
-      '<span id="kleegr-name-ok" style="cursor:pointer;font:700 14px system-ui;color:#15803d">&check;</span>' +
-      '</span>';
-    var inp = document.getElementById("kleegr-name-input");
-    var ok = document.getElementById("kleegr-name-ok");
-    function finish() {
-      var v = (inp && inp.value || "").trim();
-      if (!v) { if (inp) inp.focus(); return; }
-      saveName(v);
-      renderIdle();
-      callback(v);
-    }
-    if (ok) ok.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); finish(); });
-    if (inp) { inp.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); finish(); } }); inp.focus(); }
-  }
-
-  function decodeJwtPayload(jwt) {
-    try {
-      var b = jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-      var json = decodeURIComponent(atob(b).split("").map(function (c) { return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2); }).join(""));
-      return JSON.parse(json);
-    } catch (e) { return null; }
-  }
-  function looksLikeJwt(v) { return typeof v === "string" && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(v); }
   function getUserId() {
     if (window.__klgUserId) return window.__klgUserId;
     var uid = "";
     try { if (window.__USER__ && window.__USER__.id) uid = window.__USER__.id; } catch (e) {}
-    if (!uid) {
-      try {
-        for (var i = 0; i < localStorage.length && !uid; i++) {
-          var val = localStorage.getItem(localStorage.key(i));
-          if (!val) continue;
-          var jwt = null;
-          if (looksLikeJwt(val)) jwt = val;
-          else { try { var o = JSON.parse(val); var cand = o && (o.token || o.access_token || o.accessToken || o.jwt || (o.value && (o.value.token || o.value.access_token))); if (looksLikeJwt(cand)) jwt = cand; } catch (e) {} }
-          if (!jwt) continue;
-          var p = decodeJwtPayload(jwt);
-          if (p) { uid = p.user_id || p.userId || p.sub || (p.user && p.user.id) || ""; }
-        }
-      } catch (e) {}
-    }
-    if (uid) window.__klgUserId = uid;
     return uid;
   }
 
@@ -125,7 +77,9 @@
   }
 
   function handleMicClick() {
-    promptForName(function () { startRecording(); });
+    var name = ensureName();
+    if (!name) return;  // user cancelled the prompt
+    startRecording();
   }
 
   function renderRecording() {
