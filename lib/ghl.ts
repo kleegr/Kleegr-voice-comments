@@ -1,7 +1,6 @@
 /**
- * Minimal GHL v2 API helpers. Each takes a bearer token (a per-location access
- * token from the shared Token table, or a PIT). These THROW on HTTP error so
- * the caller can detect auth failures (401/403) and refresh+retry.
+ * GHL v2 API helpers. Each takes a bearer token (a per-location access token).
+ * These THROW on HTTP error so the caller can detect auth failures and refresh.
  */
 
 import axios from "axios";
@@ -53,4 +52,34 @@ export async function sendInternalComment(
     });
     const d = res.data || {};
     return d.messageId || d.id || d.message?.id;
+}
+
+export interface GhlUser {
+    id: string;
+    name: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+}
+
+/** Get all users for a location. Uses the deprecated but functional GET /users/ endpoint. */
+export async function getLocationUsers(token: string, locationId: string): Promise<GhlUser[]> {
+    try {
+        const res = await axios.get(`${BASE}/users/`, {
+            params: { locationId },
+            headers: { Authorization: `Bearer ${token}`, Version: "2021-07-28", Accept: "application/json" },
+        });
+        const raw = res.data?.users || res.data || [];
+        if (!Array.isArray(raw)) return [];
+        return raw.map((u: any) => ({
+            id: u.id || u._id || "",
+            name: u.name || [u.firstName, u.lastName].filter(Boolean).join(" ") || "",
+            firstName: u.firstName || "",
+            lastName: u.lastName || "",
+            email: u.email || "",
+        })).filter((u: GhlUser) => u.id);
+    } catch (e: any) {
+        console.error("[ghl] getLocationUsers failed:", e?.response?.status, e?.response?.data || e?.message);
+        return [];
+    }
 }

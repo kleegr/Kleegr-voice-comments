@@ -1,9 +1,9 @@
 /**
  * POST /api/internal-comment
  *
- * URL must be in the message text (GHL doesn't render attachment links for
- * internal comments, so the player script needs the URL in text to find it).
- * Name goes first so inbox preview shows "Name: \uD83C\uDFA4 Voice note htt..."
+ * Multi-subaccount: resolves per-location GHL token from Supabase. Posts an
+ * InternalComment with the media URL in text (player needs it). Passes userId
+ * for avatar attribution. Falls back cleanly if userId is invalid.
  */
 
 import { NextResponse } from "next/server";
@@ -36,7 +36,6 @@ export async function POST(req: Request) {
         const contactIdIn = ((form.get("contactId") as string | null) || "").trim();
         const conversationId = ((form.get("conversationId") as string | null) || "").trim();
         const userId = ((form.get("userId") as string | null) || "").trim();
-        const userName = ((form.get("userName") as string | null) || "").trim();
         const note = ((form.get("note") as string | null) || "").trim();
         const locationId = ((form.get("locationId") as string | null) || "").trim();
 
@@ -53,7 +52,7 @@ export async function POST(req: Request) {
         if (!token && process.env.GHL_PIT) token = process.env.GHL_PIT;
         if (!token) {
             return NextResponse.json(
-                { success: false, error: `No GHL token for location ${locationId || "(unknown)"}. Ensure the App Directory app is installed there.` },
+                { success: false, error: `No GHL token for location ${locationId || "(unknown)"}.` },
                 { status: 502, headers: cors }
             );
         }
@@ -64,19 +63,13 @@ export async function POST(req: Request) {
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // Name first, then label, then URL on same line (player needs it in text).
-            // Inbox preview truncates, so it shows: "Name: \uD83C\uDFA4 Voice note htt..."
-            let prefix = userName ? `${userName}: ` : "";
-            let message = "";
-            if (note) {
-                message = `${prefix}${note}\n${voiceLabel} ${mediaUrl}`;
-            } else {
-                message = `${prefix}${voiceLabel} ${mediaUrl}`;
-            }
+            const message = note ? `${note}\n${voiceLabel} ${mediaUrl}` : `${voiceLabel} ${mediaUrl}`;
             try {
                 return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] });
             } catch (e: any) {
+                // If userId is invalid, retry without it
                 if (userId && !isAuthError(e)) {
+                    console.log("[internal-comment] userId failed, retrying without:", e?.response?.data || e?.message);
                     return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] });
                 }
                 throw e;
@@ -111,9 +104,9 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: true, ...out }, { headers: cors });
     } catch (e: any) {
         if (e?.code === "NO_CONTACT")
-            return NextResponse.json({ success: false, error: "Could not resolve contact from conversationId" }, { status: 422, headers: cors });
+            return NextResponse.json({ success: false, error: "Could not resolve contact" }, { status: 422, headers: cors });
         if (e?.code === "UPLOAD_FAILED")
-            return NextResponse.json({ success: false, error: "Audio upload to GHL media library failed" }, { status: 502, headers: cors });
+            return NextResponse.json({ success: false, error: "Audio upload failed" }, { status: 502, headers: cors });
         const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 200) : e?.message || "Internal Server Error";
         console.error("[internal-comment] error:", detail);
         return NextResponse.json({ success: false, error: detail }, { status: 502, headers: cors });
