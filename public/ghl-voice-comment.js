@@ -1,13 +1,12 @@
-/* Kleegr — Voice note for GHL Internal Comments v27
- * ID on second line (preview only shows first line).
- * Player matches vn:HEXID pattern in text nodes. */
+/* Kleegr — Voice note for GHL Internal Comments v28
+ * Clean preview (em-space padding). Improved delete. */
 (function kleegrVoiceComment() {
   "use strict";
   var ENDPOINT="https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var AUDIO_BASE="https://kleegr-voice-comments.vercel.app/api/audio/";
   var DECRYPT_ENDPOINT="https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID="69d29cd45ed1d5be94e6e582";
-  var VERSION=27;
+  var VERSION=28;
   if(window.__kleegrVoiceCommentInstalled===VERSION)return;
   window.__kleegrVoiceCommentInstalled=VERSION;
   var recording=false,pendingSend=false,pendingNote="",mediaRecorder=null,chunks=[],timerInt=null,startedAt=0,lastStream=null;
@@ -41,17 +40,38 @@
   function isAudioHref(href){if(!href)return false;if(AUDIO_RE.test(href))return true;if(/filesafe\.space\/[^\s]*\/media\//i.test(href))return true;if(/kleegr-voice-comments\.vercel\.app\/v\//i.test(href))return true;return false;}
   function chipExistsForDoc(href){var auds=document.querySelectorAll("audio.klg-audio");for(var i=0;i<auds.length;i++){if(auds[i].getAttribute("src")===href)return true;}return false;}
   function inInboxList(el){var node=el;for(var i=0;i<12&&node;i++){if(node.querySelectorAll){var rows=node.querySelectorAll('a[href*="/conversations/conversations/"]');if(rows.length>=3)return true;}node=node.parentElement;}return false;}
-  function hideVoiceMessage(chip){var node=chip;for(var i=0;i<20&&node&&node!==document.body;i++){try{var cs=window.getComputedStyle(node);var bg=cs.backgroundColor||"";if(bg&&bg!=="rgba(0, 0, 0, 0)"&&bg!=="transparent"&&bg!=="rgb(255, 255, 255)"&&bg.indexOf("255, 255, 255")===-1){var row=node.parentElement;if(row){row.style.display="none";return}node.style.display="none";return}}catch(e){}node=node.parentElement;}if(chip.parentElement)chip.parentElement.style.display="none";}
+
+  // DELETE: walk up from chip, skip chip itself, find the yellow bubble, hide it + its parent + avatar row
+  function hideVoiceMessage(chip) {
+    var node = chip.parentElement; // start ABOVE the chip
+    var candidates = [];
+    for (var i = 0; i < 25 && node && node !== document.body; i++) {
+      var r = node.getBoundingClientRect();
+      if (r.width > 80 && r.height > 20 && r.height < 600) {
+        candidates.push(node);
+      }
+      if (r.height > 500) break; // hit the conversation container, stop
+      node = node.parentElement;
+    }
+    // Pick the largest candidate that's still under 300px tall (likely the full message row)
+    var best = null;
+    for (var c = candidates.length - 1; c >= 0; c--) {
+      var cr = candidates[c].getBoundingClientRect();
+      if (cr.height < 300) { best = candidates[c]; break; }
+    }
+    if (!best && candidates.length) best = candidates[candidates.length - 1];
+    if (best) { best.style.display = "none"; return; }
+    chip.parentElement.style.display = "none";
+  }
+
   function makeChip(href){var chip=document.createElement("span");chip.className="klg-audio-chip";chip.style.cssText="display:inline-flex;align-items:center;gap:8px;vertical-align:middle;margin-left:4px";var audio=document.createElement("audio");audio.className="klg-audio";audio.src=href;audio.preload="metadata";var play=document.createElement("button");play.type="button";play.style.cssText="border:none;background:rgba(180,83,9,.15);border-radius:50%;width:26px;height:26px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;color:"+AMBER;play.innerHTML=playSvg();var barWrap=document.createElement("span");barWrap.style.cssText="position:relative;width:96px;height:4px;background:rgba(180,83,9,.25);border-radius:2px;cursor:pointer;flex:0 0 auto";var barFill=document.createElement("span");barFill.style.cssText="position:absolute;left:0;top:0;height:100%;width:0%;background:"+AMBER+";border-radius:2px";barWrap.appendChild(barFill);var time=document.createElement("span");time.style.cssText="font:600 11px system-ui;color:"+AMBER+";white-space:nowrap";time.textContent="0:00";var speed=document.createElement("button");speed.type="button";speed.style.cssText="border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:"+AMBER+";padding:2px 5px";var rates=[1,1.5,2,0.75],ri=0;speed.textContent="1x";var del=document.createElement("button");del.type="button";del.title="Delete";del.style.cssText="border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:2px;color:"+AMBER+";opacity:.5";del.innerHTML=trashSvg();del.addEventListener("mouseenter",function(){del.style.opacity="1";del.style.color="#dc2626"});del.addEventListener("mouseleave",function(){del.style.opacity=".5";del.style.color=AMBER});del.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(!confirm("Delete this voice note?"))return;hideVoiceMessage(chip)});play.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(audio.paused)audio.play();else audio.pause()});audio.addEventListener("play",function(){play.innerHTML=pauseSvg()});audio.addEventListener("pause",function(){play.innerHTML=playSvg()});audio.addEventListener("ended",function(){play.innerHTML=playSvg()});audio.addEventListener("loadedmetadata",function(){time.textContent="0:00"+(isFinite(audio.duration)?" / "+fmt(audio.duration):"")});audio.addEventListener("timeupdate",function(){if(audio.duration&&isFinite(audio.duration)){barFill.style.width=(audio.currentTime/audio.duration*100)+"%";time.textContent=fmt(audio.currentTime)+" / "+fmt(audio.duration)}else{time.textContent=fmt(audio.currentTime)}});barWrap.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();var r=barWrap.getBoundingClientRect();var p=(e.clientX-r.left)/r.width;if(audio.duration&&isFinite(audio.duration))audio.currentTime=Math.max(0,Math.min(1,p))*audio.duration});speed.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();ri=(ri+1)%rates.length;audio.playbackRate=rates[ri];speed.textContent=rates[ri]+"x"});chip.appendChild(play);chip.appendChild(barWrap);chip.appendChild(time);chip.appendChild(speed);chip.appendChild(del);chip.appendChild(audio);return chip;}
   function upgradeAudioComments(){
-    // old-style: <a> tags with audio URLs
     var links=document.getElementsByTagName("a");
     for(var i=0;i<links.length;i++){var a=links[i];var href=a.getAttribute&&a.getAttribute("href")||"";if(!isAudioHref(href))continue;a.style.display="none";if(chipExistsForDoc(href))continue;if(inInboxList(a))continue;if(a.parentNode)a.parentNode.insertBefore(makeChip(href),a.nextSibling);}
-    // new-style: text containing "vn:" followed by 8 hex chars
     var VN_RE=/vn:([a-f0-9]{8})/;
     var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null);
-    var hits=[],node;
-    while((node=walker.nextNode())){var v=node.nodeValue||"";if(VN_RE.test(v))hits.push(node);}
+    var hits=[],nd;
+    while((nd=walker.nextNode())){var v=nd.nodeValue||"";if(VN_RE.test(v))hits.push(nd);}
     for(var h=0;h<hits.length;h++){
       var tn=hits[h];var parent=tn.parentElement;
       if(!parent||parent.__klgVnDone)continue;
@@ -62,8 +82,7 @@
       var audioSrc=AUDIO_BASE+vnId+".webm";
       if(chipExistsForDoc(audioSrc))continue;
       parent.__klgVnDone=true;
-      // hide the "vn:abc12345" text
-      tn.nodeValue=(tn.nodeValue||"").replace("vn:"+vnId,"").trim();
+      tn.nodeValue=(tn.nodeValue||"").replace(/[\s\u2003]*vn:[a-f0-9]{8}/,"").trim();
       parent.appendChild(makeChip(audioSrc));
     }
   }
