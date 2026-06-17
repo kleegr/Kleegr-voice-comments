@@ -1,6 +1,6 @@
 /**
  * POST /api/internal-comment
- * ID on its own line so preview shows just "Voice note".
+ * Pads with em-spaces between label and ID so preview truncates before the ID.
  */
 import { NextResponse } from "next/server";
 import axios from "axios";
@@ -29,6 +29,9 @@ async function storeVoiceNote(id: string, audioUrl: string, locationId: string):
         { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" } });
 }
 
+// 80 em-spaces (U+2003) to push the ID past any preview truncation
+const EM_PAD = "\u2003".repeat(80);
+
 export async function POST(req: Request) {
     try {
         const form = await req.formData();
@@ -50,10 +53,10 @@ export async function POST(req: Request) {
             const vnId = genShortId();
             try { await storeVoiceNote(vnId, mediaUrl, locationId); } catch (e: any) { console.error("[internal-comment] storeVoiceNote:", e?.message); }
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // ID on second line so preview only shows the label
+            // Label + 80 em-spaces + vn:ID. Preview truncates in the spaces, showing only the label.
             const message = note
-                ? `${note}\n${voiceLabel}\nvn:${vnId}`
-                : `${voiceLabel}\nvn:${vnId}`;
+                ? `${note}\n${voiceLabel}${EM_PAD}vn:${vnId}`
+                : `${voiceLabel}${EM_PAD}vn:${vnId}`;
             try { return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] }); }
             catch (e: any) { if (userId && !isAuthError(e)) { return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] }); } throw e; }
         }
