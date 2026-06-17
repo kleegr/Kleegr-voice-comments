@@ -1,15 +1,15 @@
-/* Kleegr — Voice note for GHL Internal Comments v30
- * BACK TO BASICS: URL in text (player finds <a> tags, proven to work).
- * Em-space padding keeps preview clean. Delete goes 3 levels above yellow bubble. */
+/* Kleegr — Voice note for GHL Internal Comments v31
+ * Fix: strip em-spaces from display, track deleted URLs so timer doesn't recreate. */
 (function kleegrVoiceComment() {
   "use strict";
   var ENDPOINT="https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var DECRYPT_ENDPOINT="https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID="69d29cd45ed1d5be94e6e582";
-  var VERSION=30;
+  var VERSION=31;
   if(window.__kleegrVoiceCommentInstalled===VERSION)return;
   window.__kleegrVoiceCommentInstalled=VERSION;
   var recording=false,pendingSend=false,pendingNote="",mediaRecorder=null,chunks=[],timerInt=null,startedAt=0,lastStream=null;
+  var deletedUrls={}; // track deleted voice notes so timer doesn't recreate them
   function getLocationId(){var p=location.pathname||"";var m=p.match(/\/v2\/location\/([a-zA-Z0-9]+)/);if(m)return m[1];m=location.href.match(/[?&]locationId=([a-zA-Z0-9]+)/);return m?m[1]:"";}
   function getConversationId(){var seg=(location.pathname||"").split("/v2/location/")[1];if(seg){var parts=seg.split("/");if(parts[1]==="conversations"&&parts[2]==="conversations"&&parts[3])return parts[3];}var m=location.href.match(/conversations\/conversations\/([A-Za-z0-9-]+)/);return m?m[1]:"";}
   function getContactId(){var seg=(location.pathname||"").split("/v2/location/")[1];if(seg){var parts=seg.split("/");if(parts[1]==="contacts"&&parts[2]==="detail"&&parts[3])return parts[3];}var a=document.querySelector('a[href*="/contacts/detail/"]');if(a){var mm=a.getAttribute("href").match(/\/contacts\/detail\/([A-Za-z0-9]+)/);if(mm)return mm[1];}return"";}
@@ -41,7 +41,8 @@
   function chipExistsForDoc(href){var auds=document.querySelectorAll("audio.klg-audio");for(var i=0;i<auds.length;i++){if(auds[i].getAttribute("src")===href)return true;}return false;}
   function inInboxList(el){var node=el;for(var i=0;i<12&&node;i++){if(node.querySelectorAll){var rows=node.querySelectorAll('a[href*="/conversations/conversations/"]');if(rows.length>=3)return true;}node=node.parentElement;}return false;}
 
-  function hideVoiceMessage(chip){
+  function hideVoiceMessage(chip,href){
+    if(href)deletedUrls[href]=true; // remember so timer doesn't recreate
     var node=chip;
     for(var i=0;i<20&&node&&node!==document.body;i++){
       try{var cs=window.getComputedStyle(node);var bg=cs.backgroundColor||"";if(bg&&bg!=="rgba(0, 0, 0, 0)"&&bg!=="transparent"&&bg!=="rgb(255, 255, 255)"&&bg.indexOf("255, 255, 255")===-1){var target=node;for(var j=0;j<3;j++){if(target.parentElement&&target.parentElement!==document.body)target=target.parentElement;}target.style.display="none";return;}}catch(e){}
@@ -50,9 +51,20 @@
     node=chip;for(var k=0;k<8&&node;k++){node=node.parentElement;}if(node)node.style.display="none";
   }
 
-  function makeChip(href){var chip=document.createElement("span");chip.className="klg-audio-chip";chip.style.cssText="display:inline-flex;align-items:center;gap:8px;vertical-align:middle;margin-left:4px";var audio=document.createElement("audio");audio.className="klg-audio";audio.src=href;audio.preload="metadata";var play=document.createElement("button");play.type="button";play.style.cssText="border:none;background:rgba(180,83,9,.15);border-radius:50%;width:26px;height:26px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;color:"+AMBER;play.innerHTML=playSvg();var barWrap=document.createElement("span");barWrap.style.cssText="position:relative;width:96px;height:4px;background:rgba(180,83,9,.25);border-radius:2px;cursor:pointer;flex:0 0 auto";var barFill=document.createElement("span");barFill.style.cssText="position:absolute;left:0;top:0;height:100%;width:0%;background:"+AMBER+";border-radius:2px";barWrap.appendChild(barFill);var time=document.createElement("span");time.style.cssText="font:600 11px system-ui;color:"+AMBER+";white-space:nowrap";time.textContent="0:00";var speed=document.createElement("button");speed.type="button";speed.style.cssText="border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:"+AMBER+";padding:2px 5px";var rates=[1,1.5,2,0.75],ri=0;speed.textContent="1x";var del=document.createElement("button");del.type="button";del.title="Delete";del.style.cssText="border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:2px;color:"+AMBER+";opacity:.5";del.innerHTML=trashSvg();del.addEventListener("mouseenter",function(){del.style.opacity="1";del.style.color="#dc2626"});del.addEventListener("mouseleave",function(){del.style.opacity=".5";del.style.color=AMBER});del.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(!confirm("Delete this voice note?"))return;hideVoiceMessage(chip)});play.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(audio.paused)audio.play();else audio.pause()});audio.addEventListener("play",function(){play.innerHTML=pauseSvg()});audio.addEventListener("pause",function(){play.innerHTML=playSvg()});audio.addEventListener("ended",function(){play.innerHTML=playSvg()});audio.addEventListener("loadedmetadata",function(){time.textContent="0:00"+(isFinite(audio.duration)?" / "+fmt(audio.duration):"")});audio.addEventListener("timeupdate",function(){if(audio.duration&&isFinite(audio.duration)){barFill.style.width=(audio.currentTime/audio.duration*100)+"%";time.textContent=fmt(audio.currentTime)+" / "+fmt(audio.duration)}else{time.textContent=fmt(audio.currentTime)}});barWrap.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();var r=barWrap.getBoundingClientRect();var p=(e.clientX-r.left)/r.width;if(audio.duration&&isFinite(audio.duration))audio.currentTime=Math.max(0,Math.min(1,p))*audio.duration});speed.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();ri=(ri+1)%rates.length;audio.playbackRate=rates[ri];speed.textContent=rates[ri]+"x"});chip.appendChild(play);chip.appendChild(barWrap);chip.appendChild(time);chip.appendChild(speed);chip.appendChild(del);chip.appendChild(audio);return chip;}
+  // Strip em-spaces from text nodes near the audio link
+  function cleanEmSpaces(parent){
+    var tw=document.createTreeWalker(parent,NodeFilter.SHOW_TEXT,null);
+    var tn;
+    while((tn=tw.nextNode())){
+      var v=tn.nodeValue||"";
+      if(v.indexOf("\u2003")>-1){
+        tn.nodeValue=v.replace(/[\u2003]+/g," ").trim();
+      }
+    }
+  }
 
-  // SIMPLE: find <a> tags with audio URLs, hide them, insert player. Proven approach.
+  function makeChip(href){var chip=document.createElement("span");chip.className="klg-audio-chip";chip.style.cssText="display:inline-flex;align-items:center;gap:8px;vertical-align:middle;margin-left:4px";var audio=document.createElement("audio");audio.className="klg-audio";audio.src=href;audio.preload="metadata";var play=document.createElement("button");play.type="button";play.style.cssText="border:none;background:rgba(180,83,9,.15);border-radius:50%;width:26px;height:26px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;color:"+AMBER;play.innerHTML=playSvg();var barWrap=document.createElement("span");barWrap.style.cssText="position:relative;width:96px;height:4px;background:rgba(180,83,9,.25);border-radius:2px;cursor:pointer;flex:0 0 auto";var barFill=document.createElement("span");barFill.style.cssText="position:absolute;left:0;top:0;height:100%;width:0%;background:"+AMBER+";border-radius:2px";barWrap.appendChild(barFill);var time=document.createElement("span");time.style.cssText="font:600 11px system-ui;color:"+AMBER+";white-space:nowrap";time.textContent="0:00";var speed=document.createElement("button");speed.type="button";speed.style.cssText="border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:"+AMBER+";padding:2px 5px";var rates=[1,1.5,2,0.75],ri=0;speed.textContent="1x";var del=document.createElement("button");del.type="button";del.title="Delete";del.style.cssText="border:none;background:transparent;cursor:pointer;display:inline-flex;align-items:center;padding:2px;color:"+AMBER+";opacity:.5";del.innerHTML=trashSvg();del.addEventListener("mouseenter",function(){del.style.opacity="1";del.style.color="#dc2626"});del.addEventListener("mouseleave",function(){del.style.opacity=".5";del.style.color=AMBER});del.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(!confirm("Delete this voice note?"))return;hideVoiceMessage(chip,href)});play.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(audio.paused)audio.play();else audio.pause()});audio.addEventListener("play",function(){play.innerHTML=pauseSvg()});audio.addEventListener("pause",function(){play.innerHTML=playSvg()});audio.addEventListener("ended",function(){play.innerHTML=playSvg()});audio.addEventListener("loadedmetadata",function(){time.textContent="0:00"+(isFinite(audio.duration)?" / "+fmt(audio.duration):"")});audio.addEventListener("timeupdate",function(){if(audio.duration&&isFinite(audio.duration)){barFill.style.width=(audio.currentTime/audio.duration*100)+"%";time.textContent=fmt(audio.currentTime)+" / "+fmt(audio.duration)}else{time.textContent=fmt(audio.currentTime)}});barWrap.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();var r=barWrap.getBoundingClientRect();var p=(e.clientX-r.left)/r.width;if(audio.duration&&isFinite(audio.duration))audio.currentTime=Math.max(0,Math.min(1,p))*audio.duration});speed.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();ri=(ri+1)%rates.length;audio.playbackRate=rates[ri];speed.textContent=rates[ri]+"x"});chip.appendChild(play);chip.appendChild(barWrap);chip.appendChild(time);chip.appendChild(speed);chip.appendChild(del);chip.appendChild(audio);return chip;}
+
   function upgradeAudioComments(){
     var links=document.getElementsByTagName("a");
     for(var i=0;i<links.length;i++){
@@ -60,9 +72,14 @@
       var href=a.getAttribute&&a.getAttribute("href")||"";
       if(!isAudioHref(href))continue;
       a.style.display="none";
+      if(deletedUrls[href])continue; // skip deleted
       if(chipExistsForDoc(href))continue;
       if(inInboxList(a))continue;
-      if(a.parentNode)a.parentNode.insertBefore(makeChip(href),a.nextSibling);
+      // Clean em-spaces from the message text so it displays nicely
+      if(a.parentNode){
+        cleanEmSpaces(a.parentNode);
+        a.parentNode.insertBefore(makeChip(href),a.nextSibling);
+      }
     }
   }
 
