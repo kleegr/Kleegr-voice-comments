@@ -1,18 +1,15 @@
 /**
  * POST /api/internal-comment
- * Pads with em-spaces between label and ID so preview truncates before the ID.
+ * Back to URL-in-text (player needs it). Em-space padding hides it from preview.
  */
 import { NextResponse } from "next/server";
-import axios from "axios";
 import { uploadAudio, sendInternalComment, getConversationContactId } from "../../../lib/ghl";
-import { getLocationTokenRow, refreshLocationToken, TokenRow, hasSupabase, SUPABASE_URL } from "../../../lib/token";
-import crypto from "crypto";
+import { getLocationTokenRow, refreshLocationToken, TokenRow, hasSupabase } from "../../../lib/token";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept" };
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || "";
 
 export async function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 
@@ -21,15 +18,6 @@ function isAuthError(e: any): boolean {
     return s === 401 || s === 403 || /not accessible|unauthor/i.test(body);
 }
 
-function genShortId(): string { return crypto.randomBytes(4).toString("hex"); }
-
-async function storeVoiceNote(id: string, audioUrl: string, locationId: string): Promise<void> {
-    if (!SERVICE_KEY) return;
-    await axios.post(`${SUPABASE_URL}/rest/v1/VoiceNote`, { id, audioUrl, locationId },
-        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json", Prefer: "return=minimal" } });
-}
-
-// 80 em-spaces (U+2003) to push the ID past any preview truncation
 const EM_PAD = "\u2003".repeat(80);
 
 export async function POST(req: Request) {
@@ -50,13 +38,11 @@ export async function POST(req: Request) {
         const buffer = Buffer.from(await file.arrayBuffer()); const filename = file.name || "voice-note.webm"; const mime = file.type || "audio/webm";
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
-            const vnId = genShortId();
-            try { await storeVoiceNote(vnId, mediaUrl, locationId); } catch (e: any) { console.error("[internal-comment] storeVoiceNote:", e?.message); }
             const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // Label + 80 em-spaces + vn:ID. Preview truncates in the spaces, showing only the label.
+            // Label + em-space padding + URL. Preview truncates in the padding. Player finds the URL as an <a> tag.
             const message = note
-                ? `${note}\n${voiceLabel}${EM_PAD}vn:${vnId}`
-                : `${voiceLabel}${EM_PAD}vn:${vnId}`;
+                ? `${note}\n${voiceLabel}${EM_PAD}${mediaUrl}`
+                : `${voiceLabel}${EM_PAD}${mediaUrl}`;
             try { return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] }); }
             catch (e: any) { if (userId && !isAuthError(e)) { return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] }); } throw e; }
         }
