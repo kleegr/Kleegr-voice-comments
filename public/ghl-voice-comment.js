@@ -1,13 +1,13 @@
 /**
  * Kleegr — Voice Notes + File Attachments for GHL Internal Comments
- * Version 37 — Fix drag zone scope (composer only), add delete for file attachments.
+ * Version 38 — Fix: scroll to refresh after post, cleaner delete button on attachments.
  */
 (function kleegrVoiceComment() {
   "use strict";
   var ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var DECRYPT_ENDPOINT = "https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID = "69d29cd45ed1d5be94e6e582";
-  var VERSION = 37;
+  var VERSION = 38;
   if (window.__kleegrVoiceCommentInstalled === VERSION) return;
   window.__kleegrVoiceCommentInstalled = VERSION;
   console.log("[kleegr-voice] v" + VERSION + " loaded");
@@ -22,7 +22,7 @@
   var USERID_KEY="kleegr_voice_ghl_user_id",_resolving=false;
   function getCachedUserId(){try{return localStorage.getItem(USERID_KEY)||""}catch(e){return""}}
   function cacheUserId(u){try{localStorage.setItem(USERID_KEY,u)}catch(e){}}
-  function resolveUserSession(){if(getCachedUserId()||_resolving)return;if(typeof window.exposeSessionDetails!=="function")return;_resolving=true;try{window.exposeSessionDetails(APP_ID).then(function(enc){if(!enc){_resolving=false;return;}fetch(DECRYPT_ENDPOINT,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({encryptedData:enc})}).then(function(r){return r.json()}).then(function(d){_resolving=false;if(d&&d.userId){cacheUserId(d.userId);console.log("[kleegr-voice] userId:",d.userId,d.userName)}}).catch(function(){_resolving=false})}).catch(function(){_resolving=false})}catch(e){_resolving=false}}
+  function resolveUserSession(){if(getCachedUserId()||_resolving)return;if(typeof window.exposeSessionDetails!=="function")return;_resolving=true;try{window.exposeSessionDetails(APP_ID).then(function(enc){if(!enc){_resolving=false;return;}fetch(DECRYPT_ENDPOINT,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({encryptedData:enc})}).then(function(r){return r.json()}).then(function(d){_resolving=false;if(d&&d.userId){cacheUserId(d.userId)}}).catch(function(){_resolving=false})}).catch(function(){_resolving=false})}catch(e){_resolving=false}}
 
   function micSvg(c){return '<svg width="21" height="21" viewBox="0 0 24 24" fill="'+c+'"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>';}
   function clipSvg(c){return '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="'+c+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';}
@@ -35,7 +35,7 @@
   function fmt(s){s=Math.floor(s||0);return Math.floor(s/60)+":"+String(s%60).padStart(2,"0");}
   var AMBER="#b45309",AMBER_BG="#fff8e1",AMBER_BD="#f59e0b";
 
-  function injectStyleOnce(){if(document.getElementById("kleegr-voice-style"))return;var s=document.createElement("style");s.id="kleegr-voice-style";s.textContent=['a[href$=".webm"],a[href$=".ogg"],a[href$=".oga"],a[href$=".mp3"],a[href$=".m4a"],a[href$=".wav"]{display:none!important}','.klg-wave{display:inline-flex;align-items:center;gap:2px;height:16px}','.klg-wave i{display:inline-block;width:2px;height:5px;background:'+AMBER+';border-radius:1px;animation:klgwave .9s ease-in-out infinite}','.klg-wave i:nth-child(2){animation-delay:.12s}.klg-wave i:nth-child(3){animation-delay:.24s}.klg-wave i:nth-child(4){animation-delay:.36s}.klg-wave i:nth-child(5){animation-delay:.48s}','@keyframes klgwave{0%,100%{height:5px}50%{height:15px}}','.klg-dropzone{position:absolute;inset:0;background:rgba(180,83,9,.08);border:2px dashed '+AMBER_BD+';border-radius:8px;display:flex;align-items:center;justify-content:center;font:600 14px system-ui;color:'+AMBER+';z-index:999;pointer-events:none}','.klg-staged{display:flex;align-items:center;gap:6px;padding:4px 10px;margin:4px 0;border-radius:8px;background:'+AMBER_BG+';border:1px solid '+AMBER_BD+';font:500 12px system-ui;color:'+AMBER+'}','.klg-staged-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}','.klg-del-attach{position:absolute;top:2px;right:2px;border:none;background:rgba(0,0,0,.5);color:white;border-radius:50%;width:20px;height:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;font:700 12px system-ui;opacity:0;transition:opacity .2s}','.klg-attach-wrap:hover .klg-del-attach{opacity:1}'].join("");document.head.appendChild(s);}
+  function injectStyleOnce(){if(document.getElementById("kleegr-voice-style"))return;var s=document.createElement("style");s.id="kleegr-voice-style";s.textContent=['a[href$=".webm"],a[href$=".ogg"],a[href$=".oga"],a[href$=".mp3"],a[href$=".m4a"],a[href$=".wav"]{display:none!important}','.klg-wave{display:inline-flex;align-items:center;gap:2px;height:16px}','.klg-wave i{display:inline-block;width:2px;height:5px;background:'+AMBER+';border-radius:1px;animation:klgwave .9s ease-in-out infinite}','.klg-wave i:nth-child(2){animation-delay:.12s}.klg-wave i:nth-child(3){animation-delay:.24s}.klg-wave i:nth-child(4){animation-delay:.36s}.klg-wave i:nth-child(5){animation-delay:.48s}','@keyframes klgwave{0%,100%{height:5px}50%{height:15px}}','.klg-dropzone{position:absolute;inset:0;background:rgba(180,83,9,.08);border:2px dashed '+AMBER_BD+';border-radius:8px;display:flex;align-items:center;justify-content:center;font:600 14px system-ui;color:'+AMBER+';z-index:999;pointer-events:none}','.klg-staged{display:flex;align-items:center;gap:6px;padding:4px 10px;margin:4px 0;border-radius:8px;background:'+AMBER_BG+';border:1px solid '+AMBER_BD+';font:500 12px system-ui;color:'+AMBER+'}','.klg-staged-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}','.klg-del-msg{border:none;background:rgba(180,83,9,.15);color:'+AMBER+';border-radius:4px;cursor:pointer;font:600 10px system-ui;padding:2px 6px;margin-top:4px;opacity:.6;transition:opacity .2s}','.klg-del-msg:hover{opacity:1;background:rgba(220,38,38,.15);color:#dc2626}'].join("");document.head.appendChild(s);}
 
   function isVisible(el){if(!el)return false;if(el.offsetParent!==null)return true;var r=el.getClientRects();return!!(r&&r.length);}
   function escHtml(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML;}
@@ -44,6 +44,28 @@
   function clearComposer(){var el=activeInternalInput();if(!el)return;try{if(el.tagName==="TEXTAREA"||el.tagName==="INPUT"){var p=el.tagName==="TEXTAREA"?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;var s=Object.getOwnPropertyDescriptor(p,"value");if(s&&s.set){s.set.call(el,"");el.dispatchEvent(new Event("input",{bubbles:true}))}}else{el.textContent="";el.dispatchEvent(new Event("input",{bubbles:true}))}}catch(e){}}
   function footerFrom(el){var card=el;for(var j=0;j<9&&card;j++){var send=card.querySelector("#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']");if(send){var bar=send.parentElement;for(var k=0;k<5&&bar;k++){if(bar.children&&bar.children.length>=2)return bar;bar=bar.parentElement;}return send.parentElement;}card=card.parentElement;}return null;}
   function inInboxList(el){var node=el;for(var i=0;i<12&&node;i++){if(node.querySelectorAll){var rows=node.querySelectorAll('a[href*="/conversations/conversations/"]');if(rows.length>=3)return true;}node=node.parentElement;}return false;}
+
+  // Try to scroll the conversation feed to bottom to trigger GHL refresh
+  function scrollConversationToBottom(){
+    // Find the scrollable conversation container
+    var containers=document.querySelectorAll('[class*="conversation"],[class*="message"],[class*="chat"]');
+    for(var i=0;i<containers.length;i++){
+      var c=containers[i];
+      if(c.scrollHeight>c.clientHeight+100&&c.clientHeight>200){
+        c.scrollTop=c.scrollHeight;
+        return;
+      }
+    }
+    // Fallback: find any tall scrollable div in the main content area
+    var divs=document.querySelectorAll('div');
+    for(var j=0;j<divs.length;j++){
+      var d=divs[j];
+      if(d.scrollHeight>d.clientHeight+200&&d.clientHeight>300&&d.clientHeight<window.innerHeight){
+        d.scrollTop=d.scrollHeight;
+        return;
+      }
+    }
+  }
 
   /* UPLOAD */
   function uploadToServer(file,isVoice,noteText,statusCb){
@@ -54,7 +76,10 @@
     if(noteText)fd.append("note",noteText);if(!isVoice)fd.append("fileName",file.name||"attachment");
     var uid=getCachedUserId();if(uid)fd.append("userId",uid);
     if(statusCb)statusCb("Uploading\u2026","#2563eb");
-    fetch(ENDPOINT,{method:"POST",body:fd}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})}).then(function(res){if(res.j&&res.j.success){if(statusCb)statusCb("Posted \u2713","#15803d",2500);[200,500,1000,1800,2800].forEach(function(d){setTimeout(function(){try{upgradeComments()}catch(e){}},d)})}else{var msg=(res.j&&res.j.error)?String(res.j.error).slice(0,80):"error";if(statusCb)statusCb("Failed: "+msg,"#dc2626",6000)}}).catch(function(){if(statusCb)statusCb("Network error","#dc2626",5000)});
+    fetch(ENDPOINT,{method:"POST",body:fd}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})}).then(function(res){if(res.j&&res.j.success){if(statusCb)statusCb("Posted \u2713","#15803d",2500);
+      // Scroll to bottom to trigger GHL's conversation refresh
+      [500,1500,3000,5000].forEach(function(d){setTimeout(function(){try{scrollConversationToBottom();upgradeComments()}catch(e){}},d)});
+    }else{var msg=(res.j&&res.j.error)?String(res.j.error).slice(0,80):"error";if(statusCb)statusCb("Failed: "+msg,"#dc2626",6000)}}).catch(function(){if(statusCb)statusCb("Network error","#dc2626",5000)});
   }
 
   /* STAGED FILE */
@@ -72,25 +97,8 @@
   /* CLIP BUTTON */
   function renderClip(target){var w=target||clipEl();if(!w)return;w.innerHTML="";var btn=document.createElement("button");btn.type="button";btn.title="Attach a file";btn.style.cssText="display:inline-flex;align-items:center;justify-content:center;height:34px;width:34px;border:none;border-radius:50%;background:transparent;cursor:pointer;";btn.innerHTML=clipSvg(AMBER);btn.addEventListener("mouseenter",function(){btn.style.background="rgba(180,83,9,0.10)"});btn.addEventListener("mouseleave",function(){btn.style.background="transparent"});btn.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();var inp=document.createElement("input");inp.type="file";inp.multiple=false;inp.style.cssText="position:fixed;top:-9999px;left:-9999px;opacity:0";document.body.appendChild(inp);inp.addEventListener("change",function(){if(inp.files&&inp.files[0])showStagedFile(inp.files[0]);inp.remove()});setTimeout(function(){if(document.body.contains(inp))inp.remove()},120000);inp.click()});w.appendChild(btn)}
 
-  /* DRAG AND DROP — scoped to the composer area only (textarea + footer), not the whole panel */
-  function setupDragDrop(){
-    var input=activeInternalInput();if(!input)return;
-    // Find the composer card: the element containing both the textarea and the footer/send button
-    // Walk up from the textarea, but stop at the first element that has BOTH the textarea and a send button
-    var footer=footerFrom(input);
-    if(!footer)return;
-    // The composer card is the common parent of the textarea and the footer
-    var card=footer.parentElement;
-    // Make sure we don't go too high — cap at 300px height
-    while(card&&card.getBoundingClientRect().height>400){card=null;break;}
-    if(!card||card.__klgDropV37)return;
-    card.__klgDropV37=true;card.style.position="relative";
-    var overlay=null;
-    card.addEventListener("dragenter",function(e){e.preventDefault();e.stopPropagation();if(!overlay){overlay=document.createElement("div");overlay.className="klg-dropzone";overlay.textContent="Drop file to attach";card.appendChild(overlay)}});
-    card.addEventListener("dragover",function(e){e.preventDefault();e.stopPropagation()});
-    card.addEventListener("dragleave",function(e){if(overlay&&!card.contains(e.relatedTarget)){overlay.remove();overlay=null}});
-    card.addEventListener("drop",function(e){e.preventDefault();e.stopPropagation();if(overlay){overlay.remove();overlay=null}var files=e.dataTransfer&&e.dataTransfer.files;if(files&&files.length)showStagedFile(files[0])});
-  }
+  /* DRAG AND DROP — scoped to composer only */
+  function setupDragDrop(){var input=activeInternalInput();if(!input)return;var footer=footerFrom(input);if(!footer)return;var card=footer.parentElement;if(!card||card.getBoundingClientRect().height>400)return;if(card.__klgDropV38)return;card.__klgDropV38=true;card.style.position="relative";var overlay=null;card.addEventListener("dragenter",function(e){e.preventDefault();e.stopPropagation();if(!overlay){overlay=document.createElement("div");overlay.className="klg-dropzone";overlay.textContent="Drop file to attach";card.appendChild(overlay)}});card.addEventListener("dragover",function(e){e.preventDefault();e.stopPropagation()});card.addEventListener("dragleave",function(e){if(overlay&&!card.contains(e.relatedTarget)){overlay.remove();overlay=null}});card.addEventListener("drop",function(e){e.preventDefault();e.stopPropagation();if(overlay){overlay.remove();overlay=null}var files=e.dataTransfer&&e.dataTransfer.files;if(files&&files.length)showStagedFile(files[0])})}
 
   /* PLACE BUTTONS */
   function placeWrap(){if(recording)return;var w=wrap(),cw=clipEl(),input=activeInternalInput();if(!input){if(w)w.remove();if(cw)cw.remove();return;}var footer=footerFrom(input);if(!footer){if(w)w.remove();if(cw)cw.remove();return;}if(!w){w=document.createElement("span");w.id="kleegr-voice-wrap";w.style.cssText="display:inline-flex;align-items:center;vertical-align:middle";renderIdle(w)}if(!cw){cw=document.createElement("span");cw.id="kleegr-clip-wrap";cw.style.cssText="display:inline-flex;align-items:center;vertical-align:middle";renderClip(cw)}var tgt=footer,bef=footer.firstChild;if(w.parentNode!==tgt){try{tgt.insertBefore(w,bef)}catch(e){}}if(cw.parentNode!==tgt){try{tgt.insertBefore(cw,w.nextSibling)}catch(e){}}setupDragDrop()}
@@ -107,40 +115,32 @@
     var links=document.getElementsByTagName("a");
     for(var i=0;i<links.length;i++){var a=links[i],href=a.getAttribute&&a.getAttribute("href")||"";if(!isAudioHref(href))continue;a.style.display="none";if(deletedUrls[href]){hideMessageRow(a);continue}if(chipExistsForDoc(href))continue;if(inInboxList(a))continue;if(a.parentNode){a.parentNode.insertBefore(makeChip(href),a.nextSibling)}}
 
-    // Add delete buttons to file attachment messages (📎)
-    var allEls=document.querySelectorAll('[class*="message"],[class*="msg"]');
-    // Broader scan: look for yellow bubbles containing 📎 text
+    // Add small "delete" text button below file attachment messages (📎)
     var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null);
     var node;
     while((node=walker.nextNode())){
       var txt=node.nodeValue||"";
-      if(txt.indexOf("\uD83D\uDCCE ")===-1)continue; // not a 📎 attachment
-      // Find the message bubble (yellow background)
+      if(txt.indexOf("\uD83D\uDCCE ")===-1)continue;
       var bubble=node.parentElement;
       for(var k=0;k<10&&bubble;k++){
-        if(bubble.__klgDelAdded)break;
+        if(bubble.__klgDelAdded38)break;
         try{
           var cs=window.getComputedStyle(bubble);
           var bg=cs.backgroundColor||"";
           if(bg&&bg!=="rgba(0, 0, 0, 0)"&&bg!=="transparent"&&bg!=="rgb(255, 255, 255)"&&bg.indexOf("255, 255, 255")===-1){
-            // Found the bubble — add delete button if not already there
-            if(!bubble.__klgDelAdded){
-              bubble.__klgDelAdded=true;
-              bubble.style.position="relative";
+            if(!bubble.__klgDelAdded38){
+              bubble.__klgDelAdded38=true;
+              // Add a small "delete" button below the attachment content
               var delBtn=document.createElement("button");
-              delBtn.className="klg-del-attach";
-              delBtn.textContent="\u2715";
-              delBtn.title="Delete this attachment";
-              // Need closure for the bubble reference
+              delBtn.className="klg-del-msg";
+              delBtn.textContent="\uD83D\uDDD1 delete";
               (function(b){delBtn.addEventListener("click",function(e){
                 e.preventDefault();e.stopPropagation();
                 if(!confirm("Delete this attachment?"))return;
-                // Mark text as deleted and hide
                 var t=b.textContent||"";deletedTexts[t.trim().substring(0,50)]=true;
                 hideMessageRow(b);
               })})(bubble);
               bubble.appendChild(delBtn);
-              bubble.classList.add("klg-attach-wrap");
             }
             break;
           }
@@ -149,16 +149,14 @@
       }
     }
 
-    // Re-hide any previously deleted attachment messages
+    // Re-hide previously deleted attachments
     for(var key in deletedTexts){
       if(!deletedTexts[key])continue;
       var tw2=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null);
       var n2;
       while((n2=tw2.nextNode())){
         var t2=(n2.nodeValue||"").trim();
-        if(t2.length>5&&key.indexOf(t2.substring(0,30))>-1){
-          hideMessageRow(n2.parentElement);
-        }
+        if(t2.length>5&&key.indexOf(t2.substring(0,30))>-1){hideMessageRow(n2.parentElement)}
       }
     }
   }
