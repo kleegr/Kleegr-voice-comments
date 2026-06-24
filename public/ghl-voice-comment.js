@@ -1,29 +1,44 @@
 /**
  * Kleegr — Voice Notes + File Attachments for GHL Internal Comments
- * Version 42 — NO delete buttons anywhere. Zero text injected into message bubbles
- * except the audio player (play icon, progress bar, time, speed).
- *
- * Features:
- * - 🎤 Mic: record → staged bar → type text → send together
- * - 📎 Clip: pick file → staged bar → type text → send together
- * - Drag-and-drop on composer → stages file
- * - Custom audio player for voice notes (play, seek, speed)
- * - NH initials via exposeSessionDetails
- * - All 65 subaccounts via Supabase tokens
- * - Scroll-to-bottom after post to trigger GHL refresh
+ * Version 43 — Delete via FLOATING overlay (child of body, not inside bubble).
+ * GHL cannot read any text from it for inbox preview.
  */
 (function kleegrVoiceComment(){
   "use strict";
   var ENDPOINT="https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var DECRYPT_ENDPOINT="https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID="69d29cd45ed1d5be94e6e582";
-  var VERSION=42;
+  var VERSION=43;
   if(window.__kleegrVoiceCommentInstalled===VERSION)return;
   window.__kleegrVoiceCommentInstalled=VERSION;
   console.log("[kleegr-voice] v"+VERSION+" loaded");
 
   var recording=false,pendingSend=false,mediaRecorder=null,chunks=[],timerInt=null,startedAt=0,lastStream=null;
   var stagedFile=null,stagedVoice=null;
+  var deletedUrls={}; // audio URLs that have been "deleted"
+
+  // Dynamic CSS to instantly hide deleted audio links
+  var dynStyle=document.createElement("style");dynStyle.id="kleegr-dyn";document.head.appendChild(dynStyle);
+  function addHideCss(href){dynStyle.textContent+='a[href="'+href.replace(/"/g,"")+'"]{ display:none!important }\n';}
+
+  // Floating delete button — lives on document.body, never inside a message bubble
+  var floatDel=document.createElement("div");
+  floatDel.style.cssText="position:fixed;z-index:99999;display:none;cursor:pointer;background:rgba(220,38,38,.85);color:white;border-radius:50%;width:22px;height:22px;align-items:center;justify-content:center;font:700 13px system-ui;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.3);transition:opacity .15s";
+  floatDel.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
+  document.body.appendChild(floatDel);
+  var floatTarget=null,floatHideTimer=null;
+
+  function showFloatDel(el,onDelete){
+    var r=el.getBoundingClientRect();
+    floatDel.style.display="flex";
+    floatDel.style.top=(r.top-6)+"px";
+    floatDel.style.left=(r.right-6)+"px";
+    floatTarget=el;
+    floatDel.onclick=function(e){e.preventDefault();e.stopPropagation();if(!confirm("Delete this message?"))return;onDelete();floatDel.style.display="none";floatTarget=null;};
+  }
+  function hideFloatDel(){floatHideTimer=setTimeout(function(){floatDel.style.display="none";floatTarget=null},200);}
+  floatDel.addEventListener("mouseenter",function(){clearTimeout(floatHideTimer)});
+  floatDel.addEventListener("mouseleave",function(){hideFloatDel()});
 
   function getLocationId(){var m=(location.pathname||"").match(/\/v2\/location\/([a-zA-Z0-9]+)/);return m?m[1]:"";}
   function getConversationId(){var seg=(location.pathname||"").split("/v2/location/")[1];if(seg){var p=seg.split("/");if(p[1]==="conversations"&&p[2]==="conversations"&&p[3])return p[3];}return"";}
@@ -54,6 +69,7 @@
   function footerFrom(el){var card=el;for(var j=0;j<9&&card;j++){var send=card.querySelector("#conv-send-button-simple,[data-testid='send-button'],.conv-send-button,button[type='submit'],[id*='send-button']");if(send){var bar=send.parentElement;for(var k=0;k<5&&bar;k++){if(bar.children&&bar.children.length>=2)return bar;bar=bar.parentElement;}return send.parentElement;}card=card.parentElement;}return null;}
   function inInboxList(el){var node=el;for(var i=0;i<12&&node;i++){if(node.querySelectorAll){var rows=node.querySelectorAll('a[href*="/conversations/conversations/"]');if(rows.length>=3)return true;}node=node.parentElement;}return false;}
   function scrollToBottom(){var divs=document.querySelectorAll('div');for(var j=0;j<divs.length;j++){var d=divs[j];if(d.scrollHeight>d.clientHeight+200&&d.clientHeight>300&&d.clientHeight<window.innerHeight){d.scrollTop=d.scrollHeight;return;}}}
+  function hideMessageRow(el){var node=el;for(var i=0;i<20&&node&&node!==document.body;i++){try{var cs=window.getComputedStyle(node);var bg=cs.backgroundColor||"";if(bg&&bg!=="rgba(0, 0, 0, 0)"&&bg!=="transparent"&&bg!=="rgb(255, 255, 255)"&&bg.indexOf("255, 255, 255")===-1){var target=node;for(var j=0;j<3;j++){if(target.parentElement&&target.parentElement!==document.body)target=target.parentElement}target.style.display="none";return true}}catch(e){}node=node.parentElement}return false}
 
   /* UPLOAD */
   function uploadToServer(file,isVoice,noteText,statusCb){
@@ -82,12 +98,12 @@
   function renderClip(target){var w=target||clipEl();if(!w)return;w.innerHTML="";var btn=document.createElement("button");btn.type="button";btn.style.cssText="display:inline-flex;align-items:center;justify-content:center;height:34px;width:34px;border:none;border-radius:50%;background:transparent;cursor:pointer;";btn.innerHTML=clipSvg(AMBER);btn.addEventListener("mouseenter",function(){btn.style.background="rgba(180,83,9,0.10)"});btn.addEventListener("mouseleave",function(){btn.style.background="transparent"});btn.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();var inp=document.createElement("input");inp.type="file";inp.multiple=false;inp.style.cssText="position:fixed;top:-9999px;opacity:0";document.body.appendChild(inp);inp.addEventListener("change",function(){if(inp.files&&inp.files[0])showStagedFile(inp.files[0]);inp.remove()});setTimeout(function(){if(document.body.contains(inp))inp.remove()},120000);inp.click()});w.appendChild(btn)}
 
   /* DRAG AND DROP */
-  function setupDragDrop(){var input=activeInternalInput();if(!input)return;var footer=footerFrom(input);if(!footer)return;var card=footer.parentElement;if(!card||card.getBoundingClientRect().height>400||card.__klgDrop42)return;card.__klgDrop42=true;card.style.position="relative";var ov=null;card.addEventListener("dragenter",function(e){e.preventDefault();e.stopPropagation();if(!ov){ov=document.createElement("div");ov.className="klg-dropzone";ov.textContent="Drop file to attach";card.appendChild(ov)}});card.addEventListener("dragover",function(e){e.preventDefault();e.stopPropagation()});card.addEventListener("dragleave",function(e){if(ov&&!card.contains(e.relatedTarget)){ov.remove();ov=null}});card.addEventListener("drop",function(e){e.preventDefault();e.stopPropagation();if(ov){ov.remove();ov=null}var f=e.dataTransfer&&e.dataTransfer.files;if(f&&f.length)showStagedFile(f[0])})}
+  function setupDragDrop(){var input=activeInternalInput();if(!input)return;var footer=footerFrom(input);if(!footer)return;var card=footer.parentElement;if(!card||card.getBoundingClientRect().height>400||card.__klgDrop43)return;card.__klgDrop43=true;card.style.position="relative";var ov=null;card.addEventListener("dragenter",function(e){e.preventDefault();e.stopPropagation();if(!ov){ov=document.createElement("div");ov.className="klg-dropzone";ov.textContent="Drop file to attach";card.appendChild(ov)}});card.addEventListener("dragover",function(e){e.preventDefault();e.stopPropagation()});card.addEventListener("dragleave",function(e){if(ov&&!card.contains(e.relatedTarget)){ov.remove();ov=null}});card.addEventListener("drop",function(e){e.preventDefault();e.stopPropagation();if(ov){ov.remove();ov=null}var f=e.dataTransfer&&e.dataTransfer.files;if(f&&f.length)showStagedFile(f[0])})}
 
   /* PLACE BUTTONS */
   function placeWrap(){if(recording)return;var w=wrap(),cw=clipEl(),input=activeInternalInput();if(!input){if(w)w.remove();if(cw)cw.remove();return}var footer=footerFrom(input);if(!footer){if(w)w.remove();if(cw)cw.remove();return}if(!w){w=document.createElement("span");w.id="kleegr-voice-wrap";w.style.cssText="display:inline-flex;align-items:center;vertical-align:middle";renderIdle(w)}if(!cw){cw=document.createElement("span");cw.id="kleegr-clip-wrap";cw.style.cssText="display:inline-flex;align-items:center;vertical-align:middle";renderClip(cw)}if(w.parentNode!==footer){try{footer.insertBefore(w,footer.firstChild)}catch(e){}}if(cw.parentNode!==footer){try{footer.insertBefore(cw,w.nextSibling)}catch(e){}}setupDragDrop()}
 
-  /* AUDIO PLAYER — play, seek, speed. NO delete button. NO title attributes. */
+  /* AUDIO PLAYER — NO delete button inside the chip. Delete is via floating overlay. */
   var AUDIO_EXT_RE=/\.(webm|ogg|oga|mp3|m4a|wav)(\?|$)/i;
   function isAudioHref(href){return href&&AUDIO_EXT_RE.test(href)}
   function chipExistsForDoc(href){var auds=document.querySelectorAll("audio.klg-audio");for(var i=0;i<auds.length;i++){if(auds[i].getAttribute("src")===href)return true}return false}
@@ -104,6 +120,9 @@
     var speed=document.createElement("button");speed.type="button";
     speed.style.cssText="border:none;background:rgba(180,83,9,.12);border-radius:6px;cursor:pointer;font:700 10px system-ui;color:"+AMBER+";padding:2px 5px";
     var rates=[1,1.5,2,0.75],ri=0;speed.textContent="1x";
+    // Hover → show floating delete (outside bubble)
+    chip.addEventListener("mouseenter",function(){clearTimeout(floatHideTimer);showFloatDel(chip,function(){deletedUrls[href]=true;addHideCss(href);hideMessageRow(chip)});});
+    chip.addEventListener("mouseleave",function(){hideFloatDel()});
     play.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(audio.paused)audio.play();else audio.pause()});
     audio.addEventListener("play",function(){play.innerHTML=pauseSvg()});
     audio.addEventListener("pause",function(){play.innerHTML=playSvg()});
@@ -116,7 +135,36 @@
     return chip;
   }
 
-  function upgradeAudioComments(){var links=document.getElementsByTagName("a");for(var i=0;i<links.length;i++){var a=links[i],href=a.getAttribute&&a.getAttribute("href")||"";if(!isAudioHref(href))continue;a.style.display="none";if(chipExistsForDoc(href))continue;if(inInboxList(a))continue;if(a.parentNode)a.parentNode.insertBefore(makeChip(href),a.nextSibling)}}
+  function upgradeAudioComments(){
+    var links=document.getElementsByTagName("a");
+    for(var i=0;i<links.length;i++){
+      var a=links[i],href=a.getAttribute&&a.getAttribute("href")||"";
+      if(!isAudioHref(href))continue;
+      a.style.display="none";
+      if(deletedUrls[href]){hideMessageRow(a);continue}
+      if(chipExistsForDoc(href))continue;
+      if(inInboxList(a))continue;
+      if(a.parentNode)a.parentNode.insertBefore(makeChip(href),a.nextSibling);
+    }
+    // Also add hover-delete to file attachment bubbles (📎) — floating, not injected
+    var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null);var node;
+    while((node=walker.nextNode())){
+      var txt=node.nodeValue||"";
+      if(txt.indexOf("\uD83D\uDCCE ")===-1)continue;
+      var bubble=node.parentElement;
+      for(var k=0;k<10&&bubble;k++){
+        if(bubble.__klgHover43)break;
+        try{var cs=window.getComputedStyle(bubble);var bg=cs.backgroundColor||"";
+          if(bg&&bg!=="rgba(0, 0, 0, 0)"&&bg!=="transparent"&&bg!=="rgb(255, 255, 255)"&&bg.indexOf("255, 255, 255")===-1){
+            if(!bubble.__klgHover43){
+              bubble.__klgHover43=true;
+              (function(b){b.addEventListener("mouseenter",function(){clearTimeout(floatHideTimer);showFloatDel(b,function(){hideMessageRow(b)})});b.addEventListener("mouseleave",function(){hideFloatDel()})})(bubble);
+            }break;
+          }}catch(e){}
+        bubble=bubble.parentElement;
+      }
+    }
+  }
 
   /* RECORDING */
   function startRecording(){if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){renderStatus("Mic not supported","#dc2626",3000);return}navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){lastStream=stream;chunks=[];var mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":(MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":"");mediaRecorder=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);mediaRecorder.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};mediaRecorder.onstop=function(){if(lastStream)lastStream.getTracks().forEach(function(t){t.stop()});if(pendingSend){var blob=new Blob(chunks,{type:mediaRecorder.mimeType||"audio/webm"});showStagedVoice(blob,Math.floor((Date.now()-startedAt)/1000))}else{renderIdle()}};mediaRecorder.start();recording=true;pendingSend=false;startedAt=Date.now();renderRecording();timerInt=setInterval(function(){var s=Math.floor((Date.now()-startedAt)/1000);var tm=document.getElementById("kleegr-voice-timer");if(tm)tm.textContent=fmt(s)},500)}).catch(function(){renderStatus("Mic denied","#dc2626",3000)})}
@@ -128,4 +176,6 @@
   injectStyleOnce();resolveUserSession();
   var rc=0,ri2=setInterval(function(){if(getCachedUserId()||rc>10){clearInterval(ri2);return}rc++;resolveUserSession()},3000);
   var ticking=false;function tick(){if(ticking)return;ticking=true;try{placeWrap();upgradeAudioComments()}catch(e){console.error("[kleegr-voice]",e)}ticking=false}setInterval(tick,1000);tick();
+  // Fast re-hide for deleted audio (200ms)
+  setInterval(function(){try{var links=document.getElementsByTagName("a");for(var i=0;i<links.length;i++){var href=links[i].getAttribute&&links[i].getAttribute("href")||"";if(deletedUrls[href])hideMessageRow(links[i])}}catch(e){}},200);
 })();
