@@ -1,7 +1,8 @@
 /**
  * POST /api/internal-comment
- * Handles voice notes AND file attachments.
- * If fileName is provided, it's a file attachment (📎). Otherwise voice note (🎤).
+ * Voice notes: URL in text only (no attachments array - prevents GHL native player).
+ * File attachments: URL in attachments array (GHL renders them natively, which is good).
+ * No em-space padding (caused layout issues). Accept URL in preview as tradeoff.
  */
 import { NextResponse } from "next/server";
 import { uploadAudio, sendInternalComment, getConversationContactId } from "../../../lib/ghl";
@@ -18,8 +19,6 @@ function isAuthError(e: any): boolean {
     const s = e?.response?.status; const body = JSON.stringify(e?.response?.data || "");
     return s === 401 || s === 403 || /not accessible|unauthor/i.test(body);
 }
-
-const EM_PAD = "\u2003".repeat(80);
 
 export async function POST(req: Request) {
     try {
@@ -50,10 +49,13 @@ export async function POST(req: Request) {
                 label = "\uD83D\uDCCE " + filename;
             }
             const message = note
-                ? `${note}\n${label}${EM_PAD}${mediaUrl}`
-                : `${label}${EM_PAD}${mediaUrl}`;
-            try { return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] }); }
-            catch (e: any) { if (userId && !isAuthError(e)) { return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] }); } throw e; }
+                ? `${note}\n${label} ${mediaUrl}`
+                : `${label} ${mediaUrl}`;
+            // Voice notes: NO attachments (prevents GHL rendering its own native player)
+            // File attachments: WITH attachments (GHL renders them nicely - native player for audio, preview for images)
+            const attachments = isVoice ? undefined : [mediaUrl];
+            try { return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments }); }
+            catch (e: any) { if (userId && !isAuthError(e)) { return await sendInternalComment(accessToken, { contactId, message, attachments }); } throw e; }
         }
 
         async function run(accessToken: string) {
