@@ -1,8 +1,7 @@
 /**
  * POST /api/internal-comment
- * Voice notes: URL in text only (no attachments array - prevents GHL native player).
- * File attachments: URL in attachments array (GHL renders them natively, which is good).
- * No em-space padding (caused layout issues). Accept URL in preview as tradeoff.
+ * Voice notes: URL in text only, NO attachments (our player finds the <a> tag).
+ * File attachments: NO URL in text, WITH attachments array (GHL renders natively).
  */
 import { NextResponse } from "next/server";
 import { uploadAudio, sendInternalComment, getConversationContactId } from "../../../lib/ghl";
@@ -42,18 +41,21 @@ export async function POST(req: Request) {
         const isVoice = !origFileName;
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
-            let label: string;
+            let message: string;
+            let attachments: string[] | undefined;
+
             if (isVoice) {
-                label = "\uD83C\uDFA4 Voice note";
+                // VOICE: URL in text (player needs the <a> tag), NO attachments (prevents GHL native player)
+                const voiceLabel = "\uD83C\uDFA4 Voice note";
+                message = note ? `${note}\n${voiceLabel} ${mediaUrl}` : `${voiceLabel} ${mediaUrl}`;
+                attachments = undefined;
             } else {
-                label = "\uD83D\uDCCE " + filename;
+                // FILE: NO URL in text (clean bubble), WITH attachments (GHL renders native preview)
+                const fileLabel = "\uD83D\uDCCE " + filename;
+                message = note ? `${note}\n${fileLabel}` : fileLabel;
+                attachments = [mediaUrl];
             }
-            const message = note
-                ? `${note}\n${label} ${mediaUrl}`
-                : `${label} ${mediaUrl}`;
-            // Voice notes: NO attachments (prevents GHL rendering its own native player)
-            // File attachments: WITH attachments (GHL renders them nicely - native player for audio, preview for images)
-            const attachments = isVoice ? undefined : [mediaUrl];
+
             try { return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments }); }
             catch (e: any) { if (userId && !isAuthError(e)) { return await sendInternalComment(accessToken, { contactId, message, attachments }); } throw e; }
         }
