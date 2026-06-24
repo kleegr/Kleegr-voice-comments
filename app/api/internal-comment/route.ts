@@ -1,6 +1,7 @@
 /**
  * POST /api/internal-comment
- * Back to URL-in-text (player needs it). Em-space padding hides it from preview.
+ * Handles voice notes AND file attachments.
+ * If fileName is provided, it's a file attachment (📎). Otherwise voice note (🎤).
  */
 import { NextResponse } from "next/server";
 import { uploadAudio, sendInternalComment, getConversationContactId } from "../../../lib/ghl";
@@ -29,20 +30,28 @@ export async function POST(req: Request) {
         const userId = ((form.get("userId") as string | null) || "").trim();
         const note = ((form.get("note") as string | null) || "").trim();
         const locationId = ((form.get("locationId") as string | null) || "").trim();
+        const origFileName = ((form.get("fileName") as string | null) || "").trim();
         if (!file) return NextResponse.json({ success: false, error: "file is required" }, { status: 400, headers: cors });
         if (!contactIdIn && !conversationId) return NextResponse.json({ success: false, error: "contactId or conversationId is required" }, { status: 400, headers: cors });
         let row: TokenRow | null = null; let token = "";
         if (locationId && hasSupabase()) { try { row = await getLocationTokenRow(locationId); } catch (e: any) {} if (row?.accessToken) token = row.accessToken; }
         if (!token && process.env.GHL_PIT) token = process.env.GHL_PIT;
         if (!token) return NextResponse.json({ success: false, error: "No token" }, { status: 502, headers: cors });
-        const buffer = Buffer.from(await file.arrayBuffer()); const filename = file.name || "voice-note.webm"; const mime = file.type || "audio/webm";
+        const buffer = Buffer.from(await file.arrayBuffer());
+        const filename = origFileName || file.name || "voice-note.webm";
+        const mime = file.type || "application/octet-stream";
+        const isVoice = !origFileName;
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
-            const voiceLabel = "\uD83C\uDFA4 Voice note";
-            // Label + em-space padding + URL. Preview truncates in the padding. Player finds the URL as an <a> tag.
+            let label: string;
+            if (isVoice) {
+                label = "\uD83C\uDFA4 Voice note";
+            } else {
+                label = "\uD83D\uDCCE " + filename;
+            }
             const message = note
-                ? `${note}\n${voiceLabel}${EM_PAD}${mediaUrl}`
-                : `${voiceLabel}${EM_PAD}${mediaUrl}`;
+                ? `${note}\n${label}${EM_PAD}${mediaUrl}`
+                : `${label}${EM_PAD}${mediaUrl}`;
             try { return await sendInternalComment(accessToken, { contactId, message, userId: userId || undefined, attachments: [mediaUrl] }); }
             catch (e: any) { if (userId && !isAuthError(e)) { return await sendInternalComment(accessToken, { contactId, message, attachments: [mediaUrl] }); } throw e; }
         }
@@ -58,7 +67,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: true, ...out }, { headers: cors });
     } catch (e: any) {
         if (e?.code === "NO_CONTACT") return NextResponse.json({ success: false, error: "Could not resolve contact" }, { status: 422, headers: cors });
-        if (e?.code === "UPLOAD_FAILED") return NextResponse.json({ success: false, error: "Audio upload failed" }, { status: 502, headers: cors });
+        if (e?.code === "UPLOAD_FAILED") return NextResponse.json({ success: false, error: "File upload failed" }, { status: 502, headers: cors });
         const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 200) : e?.message || "Error";
         return NextResponse.json({ success: false, error: detail }, { status: 502, headers: cors });
     }
