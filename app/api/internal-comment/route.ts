@@ -1,7 +1,7 @@
 /**
  * POST /api/internal-comment
- * Voice notes: URL in text only, NO attachments (our player finds the <a> tag).
- * File attachments: NO URL in text, WITH attachments array (GHL renders natively).
+ * Both voice notes and file attachments: URL in attachments array, NOT in text.
+ * Text is clean (no URL) so inbox preview stays clean.
  */
 import { NextResponse } from "next/server";
 import { uploadAudio, sendInternalComment, getConversationContactId } from "../../../lib/ghl";
@@ -42,15 +42,15 @@ export async function POST(req: Request) {
 
         async function postComment(accessToken: string, contactId: string, mediaUrl: string) {
             let message: string;
-            let attachments: string[] | undefined;
+            let attachments: string[];
 
             if (isVoice) {
-                // VOICE: URL in text (player needs the <a> tag), NO attachments (prevents GHL native player)
+                // VOICE: clean text, URL in attachments only
                 const voiceLabel = "\uD83C\uDFA4 Voice note";
-                message = note ? `${note}\n${voiceLabel} ${mediaUrl}` : `${voiceLabel} ${mediaUrl}`;
-                attachments = undefined;
+                message = note ? `${note}\n${voiceLabel}` : voiceLabel;
+                attachments = [mediaUrl];
             } else {
-                // FILE: NO URL in text (clean bubble), WITH attachments (GHL renders native preview)
+                // FILE: clean text, URL in attachments only
                 const fileLabel = "\uD83D\uDCCE " + filename;
                 message = note ? `${note}\n${fileLabel}` : fileLabel;
                 attachments = [mediaUrl];
