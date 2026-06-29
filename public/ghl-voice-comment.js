@@ -1,13 +1,14 @@
 /**
  * Kleegr — Voice Notes + File Attachments for GHL Internal Comments
- * Version 44 — No delete. Clean.
+ * Version 45 — Find audio from GHL native player (video/audio elements), not just <a> tags.
+ * Audio URL is in attachments array (clean preview), our script replaces GHL's native player.
  */
 (function kleegrVoiceComment(){
   "use strict";
   var ENDPOINT="https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var DECRYPT_ENDPOINT="https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID="69d29cd45ed1d5be94e6e582";
-  var VERSION=44;
+  var VERSION=45;
   if(window.__kleegrVoiceCommentInstalled===VERSION)return;
   window.__kleegrVoiceCommentInstalled=VERSION;
   console.log("[kleegr-voice] v"+VERSION+" loaded");
@@ -68,10 +69,11 @@
   function renderStatus(text,color,ms){var w=wrap();if(!w)return;w.innerHTML='<span style="display:inline-flex;align-items:center;height:34px;padding:0 12px;border-radius:18px;background:'+AMBER_BG+';border:1px solid '+AMBER_BD+';color:'+(color||AMBER)+';font:600 12px system-ui,sans-serif;max-width:340px">'+text+'</span>';if(ms)setTimeout(function(){if(!recording&&wrap())renderIdle()},ms)}
   function renderClip(target){var w=target||clipEl();if(!w)return;w.innerHTML="";var btn=document.createElement("button");btn.type="button";btn.style.cssText="display:inline-flex;align-items:center;justify-content:center;height:34px;width:34px;border:none;border-radius:50%;background:transparent;cursor:pointer;";btn.innerHTML=clipSvg(AMBER);btn.addEventListener("mouseenter",function(){btn.style.background="rgba(180,83,9,0.10)"});btn.addEventListener("mouseleave",function(){btn.style.background="transparent"});btn.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();var inp=document.createElement("input");inp.type="file";inp.multiple=false;inp.style.cssText="position:fixed;top:-9999px;opacity:0";document.body.appendChild(inp);inp.addEventListener("change",function(){if(inp.files&&inp.files[0])showStagedFile(inp.files[0]);inp.remove()});setTimeout(function(){if(document.body.contains(inp))inp.remove()},120000);inp.click()});w.appendChild(btn)}
 
-  function setupDragDrop(){var input=activeInternalInput();if(!input)return;var footer=footerFrom(input);if(!footer)return;var card=footer.parentElement;if(!card||card.getBoundingClientRect().height>400||card.__klgDrop44)return;card.__klgDrop44=true;card.style.position="relative";var ov=null;card.addEventListener("dragenter",function(e){e.preventDefault();e.stopPropagation();if(!ov){ov=document.createElement("div");ov.className="klg-dropzone";ov.textContent="Drop file to attach";card.appendChild(ov)}});card.addEventListener("dragover",function(e){e.preventDefault();e.stopPropagation()});card.addEventListener("dragleave",function(e){if(ov&&!card.contains(e.relatedTarget)){ov.remove();ov=null}});card.addEventListener("drop",function(e){e.preventDefault();e.stopPropagation();if(ov){ov.remove();ov=null}var f=e.dataTransfer&&e.dataTransfer.files;if(f&&f.length)showStagedFile(f[0])})}
+  function setupDragDrop(){var input=activeInternalInput();if(!input)return;var footer=footerFrom(input);if(!footer)return;var card=footer.parentElement;if(!card||card.getBoundingClientRect().height>400||card.__klgDrop45)return;card.__klgDrop45=true;card.style.position="relative";var ov=null;card.addEventListener("dragenter",function(e){e.preventDefault();e.stopPropagation();if(!ov){ov=document.createElement("div");ov.className="klg-dropzone";ov.textContent="Drop file to attach";card.appendChild(ov)}});card.addEventListener("dragover",function(e){e.preventDefault();e.stopPropagation()});card.addEventListener("dragleave",function(e){if(ov&&!card.contains(e.relatedTarget)){ov.remove();ov=null}});card.addEventListener("drop",function(e){e.preventDefault();e.stopPropagation();if(ov){ov.remove();ov=null}var f=e.dataTransfer&&e.dataTransfer.files;if(f&&f.length)showStagedFile(f[0])})}
 
   function placeWrap(){if(recording)return;var w=wrap(),cw=clipEl(),input=activeInternalInput();if(!input){if(w)w.remove();if(cw)cw.remove();return}var footer=footerFrom(input);if(!footer){if(w)w.remove();if(cw)cw.remove();return}if(!w){w=document.createElement("span");w.id="kleegr-voice-wrap";w.style.cssText="display:inline-flex;align-items:center;vertical-align:middle";renderIdle(w)}if(!cw){cw=document.createElement("span");cw.id="kleegr-clip-wrap";cw.style.cssText="display:inline-flex;align-items:center;vertical-align:middle";renderClip(cw)}if(w.parentNode!==footer){try{footer.insertBefore(w,footer.firstChild)}catch(e){}}if(cw.parentNode!==footer){try{footer.insertBefore(cw,w.nextSibling)}catch(e){}}setupDragDrop()}
 
+  /* AUDIO PLAYER */
   var AUDIO_EXT_RE=/\.(webm|ogg|oga|mp3|m4a|wav)(\?|$)/i;
   function isAudioHref(href){return href&&AUDIO_EXT_RE.test(href)}
   function chipExistsForDoc(href){var auds=document.querySelectorAll("audio.klg-audio");for(var i=0;i<auds.length;i++){if(auds[i].getAttribute("src")===href)return true}return false}
@@ -100,7 +102,71 @@
     return chip;
   }
 
-  function upgradeAudioComments(){var links=document.getElementsByTagName("a");for(var i=0;i<links.length;i++){var a=links[i],href=a.getAttribute&&a.getAttribute("href")||"";if(!isAudioHref(href))continue;a.style.display="none";if(chipExistsForDoc(href))continue;if(inInboxList(a))continue;if(a.parentNode)a.parentNode.insertBefore(makeChip(href),a.nextSibling)}}
+  function upgradeAudioComments(){
+    // 1. Find <a> tags with audio extensions (old-style: URL in text)
+    var links=document.getElementsByTagName("a");
+    for(var i=0;i<links.length;i++){
+      var a=links[i],href=a.getAttribute&&a.getAttribute("href")||"";
+      if(!isAudioHref(href))continue;
+      a.style.display="none";
+      if(chipExistsForDoc(href))continue;
+      if(inInboxList(a))continue;
+      if(a.parentNode)a.parentNode.insertBefore(makeChip(href),a.nextSibling);
+    }
+
+    // 2. Find <video> and <audio> elements with audio src (new-style: URL in attachments)
+    //    GHL renders native media players for attachment audio files.
+    //    We hide the native player and its container, then insert our amber chip.
+    var mediaEls=document.querySelectorAll("video[src],audio[src],video source[src],audio source[src]");
+    for(var j=0;j<mediaEls.length;j++){
+      var mel=mediaEls[j];
+      var msrc=mel.getAttribute("src")||""; 
+      if(!isAudioHref(msrc))continue;
+      if(chipExistsForDoc(msrc))continue;
+      if(inInboxList(mel))continue;
+      // Find the native player container (walk up to find a reasonably-sized wrapper)
+      var container=mel;
+      for(var k=0;k<8&&container;k++){
+        var h=container.getBoundingClientRect().height;
+        if(h>40&&h<300){break;}
+        container=container.parentElement;
+      }
+      if(container&&container!==document.body){
+        container.style.display="none";
+        // Insert our player after the hidden container
+        if(container.parentNode){
+          container.parentNode.insertBefore(makeChip(msrc),container.nextSibling);
+        }
+      }
+    }
+
+    // 3. Also check for <video> without src but with child <source> elements
+    var videos=document.querySelectorAll("video");
+    for(var v=0;v<videos.length;v++){
+      var vid=videos[v];
+      if(vid.__klgChecked45)continue;
+      var vsrc=vid.getAttribute("src")||"";  
+      if(!vsrc){
+        var sources=vid.querySelectorAll("source");
+        for(var ss=0;ss<sources.length;ss++){vsrc=sources[ss].getAttribute("src")||"";if(vsrc)break;}
+      }
+      if(!vsrc)vsrc=vid.currentSrc||"";
+      if(!isAudioHref(vsrc))continue;
+      if(chipExistsForDoc(vsrc))continue;
+      if(inInboxList(vid))continue;
+      vid.__klgChecked45=true;
+      var vc=vid;
+      for(var vk=0;vk<8&&vc;vk++){
+        var vh=vc.getBoundingClientRect().height;
+        if(vh>40&&vh<300){break;}
+        vc=vc.parentElement;
+      }
+      if(vc&&vc!==document.body){
+        vc.style.display="none";
+        if(vc.parentNode)vc.parentNode.insertBefore(makeChip(vsrc),vc.nextSibling);
+      }
+    }
+  }
 
   function startRecording(){if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){renderStatus("Mic not supported","#dc2626",3000);return}navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){lastStream=stream;chunks=[];var mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":(MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":"");mediaRecorder=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);mediaRecorder.ondataavailable=function(e){if(e.data&&e.data.size)chunks.push(e.data)};mediaRecorder.onstop=function(){if(lastStream)lastStream.getTracks().forEach(function(t){t.stop()});if(pendingSend){var blob=new Blob(chunks,{type:mediaRecorder.mimeType||"audio/webm"});showStagedVoice(blob,Math.floor((Date.now()-startedAt)/1000))}else{renderIdle()}};mediaRecorder.start();recording=true;pendingSend=false;startedAt=Date.now();renderRecording();timerInt=setInterval(function(){var s=Math.floor((Date.now()-startedAt)/1000);var tm=document.getElementById("kleegr-voice-timer");if(tm)tm.textContent=fmt(s)},500)}).catch(function(){renderStatus("Mic denied","#dc2626",3000)})}
   function stopTimer(){if(timerInt){clearInterval(timerInt);timerInt=null}}
