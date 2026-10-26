@@ -1,5 +1,7 @@
 /**
  * Kleegr — Voice Notes + File Attachments for GHL Internal Comments
+ * Version 46 — Bounded native-player hide: never hides outside the message bubble
+ *              (v45 could hide a large part of the conversation while scrolling up).
  * Version 45 — Find audio from GHL native player (video/audio elements), not just <a> tags.
  * Audio URL is in attachments array (clean preview), our script replaces GHL's native player.
  */
@@ -8,7 +10,7 @@
   var ENDPOINT="https://kleegr-voice-comments.vercel.app/api/internal-comment";
   var DECRYPT_ENDPOINT="https://kleegr-voice-comments.vercel.app/api/decrypt-session";
   var APP_ID="69d29cd45ed1d5be94e6e582";
-  var VERSION=45;
+  var VERSION=46;
   if(window.__kleegrVoiceCommentInstalled===VERSION)return;
   window.__kleegrVoiceCommentInstalled=VERSION;
   console.log("[kleegr-voice] v"+VERSION+" loaded");
@@ -102,6 +104,26 @@
     return chip;
   }
 
+  // v46: the old walk climbed up to 8 parents and hid whatever it landed on,
+  // even when nothing matched (0px tall while GHL is still loading history on
+  // scroll-up, or a bubble taller than 300px) — that could hide a whole chunk
+  // of the conversation. Now: never leave the message bubble, never hide a
+  // node that holds messages, stop once things get too tall, and if nothing
+  // fits yet return null so the 1s tick retries after layout.
+  function playerContainer(mel){
+    var msg=mel.closest?mel.closest("[data-message-id]"):null;
+    var c=mel;
+    for(var k=0;k<8&&c&&c!==document.body;k++){
+      if(msg){if(c===msg||!msg.contains(c))return null;}
+      else if(c.querySelector&&c.querySelector("[data-message-id]"))return null;
+      var h=c.getBoundingClientRect().height;
+      if(h>40&&h<300)return c;
+      if(h>=300)return null;
+      c=c.parentElement;
+    }
+    return null;
+  }
+
   function upgradeAudioComments(){
     // 1. Find <a> tags with audio extensions (old-style: URL in text)
     var links=document.getElementsByTagName("a");
@@ -124,14 +146,9 @@
       if(!isAudioHref(msrc))continue;
       if(chipExistsForDoc(msrc))continue;
       if(inInboxList(mel))continue;
-      // Find the native player container (walk up to find a reasonably-sized wrapper)
-      var container=mel;
-      for(var k=0;k<8&&container;k++){
-        var h=container.getBoundingClientRect().height;
-        if(h>40&&h<300){break;}
-        container=container.parentElement;
-      }
-      if(container&&container!==document.body){
+      // Find the native player container (bounded — see playerContainer)
+      var container=playerContainer(mel);
+      if(container){
         container.style.display="none";
         // Insert our player after the hidden container
         if(container.parentNode){
@@ -154,14 +171,9 @@
       if(!isAudioHref(vsrc))continue;
       if(chipExistsForDoc(vsrc))continue;
       if(inInboxList(vid))continue;
-      vid.__klgChecked45=true;
-      var vc=vid;
-      for(var vk=0;vk<8&&vc;vk++){
-        var vh=vc.getBoundingClientRect().height;
-        if(vh>40&&vh<300){break;}
-        vc=vc.parentElement;
-      }
-      if(vc&&vc!==document.body){
+      var vc=playerContainer(vid);
+      if(vc){
+        vid.__klgChecked45=true;
         vc.style.display="none";
         if(vc.parentNode)vc.parentNode.insertBefore(makeChip(vsrc),vc.nextSibling);
       }
